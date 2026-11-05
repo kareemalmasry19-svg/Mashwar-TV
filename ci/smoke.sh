@@ -70,9 +70,6 @@ screen channel-panel
 adb shell input keyevent KEYCODE_BACK
 sleep 2
 screen after-panel-back
-adb shell input tap 20 $(( ${W%x*} / 3 ))
-sleep 1
-screen before-cast
 tap "~cast" nodump
 sleep 6
 screen after-cast
