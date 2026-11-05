@@ -5,6 +5,8 @@ package com.mashwar.tv
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -12,6 +14,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -28,6 +31,8 @@ import com.google.common.util.concurrent.ListenableFuture
  */
 class PlaybackService : MediaLibraryService() {
     private var session: MediaLibrarySession? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var reconnects = 0
     private lateinit var library: ChannelLibrary
 
     override fun onCreate() {
@@ -41,10 +46,37 @@ class PlaybackService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
+            // Bigger buffer than the default (50s max) so short network drops don't stall playback.
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        /* minBufferMs = */ 30_000,
+                        /* maxBufferMs = */ 120_000,
+                        /* bufferForPlaybackMs = */ 2_500,
+                        /* bufferForPlaybackAfterRebufferMs = */ 6_000,
+                    )
+                    .setPrioritizeTimeOverSizeThresholds(true)
+                    .build()
+            )
             .build()
         player.repeatMode = Player.REPEAT_MODE_ALL
         player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) reconnects = 0
+            }
+
             override fun onPlayerError(error: PlaybackException) {
+                // Network dropped (tunnels, weak signal): reconnect quietly a few times.
+                if (error.errorCode in NETWORK_ERRORS && reconnects < MAX_RECONNECTS) {
+                    reconnects++
+                    handler.postDelayed({
+                        if (player.playerError != null) {
+                            player.prepare()
+                            player.play()
+                        }
+                    }, 1_500)
+                    return
+                }
                 // Live stream fell behind: jump back to the live edge.
                 if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     player.seekToDefaultPosition()
@@ -79,6 +111,7 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         session?.run {
             player.release()
             release()
@@ -193,3 +226,12 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 }
+
+private const val MAX_RECONNECTS = 5
+
+private val NETWORK_ERRORS = setOf(
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+    PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+    PlaybackException.ERROR_CODE_TIMEOUT,
+)

@@ -120,6 +120,11 @@ class Store(context: Context) {
         get() = prefs.getStringSet("favorites", emptySet())?.toSet() ?: emptySet()
         set(value) { prefs.edit().putStringSet("favorites", value).apply() }
 
+    /** 0 = auto, otherwise max video height (720 / 480 / 360). */
+    var maxQuality: Int
+        get() = prefs.getInt("max_quality", 0)
+        set(value) { prefs.edit().putInt("max_quality", value).apply() }
+
     var lastChannelUrl: String?
         get() = prefs.getString("last_url", null)
         set(value) { prefs.edit().putString("last_url", value).apply() }

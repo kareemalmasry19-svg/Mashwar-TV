@@ -123,6 +123,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         store.lastChannelUrl = queue[i].url
     }
 
+    var maxQuality by mutableIntStateOf(store.maxQuality)
+        private set
+
+    fun cycleQuality() {
+        val steps = listOf(0, 720, 480, 360)
+        maxQuality = steps[(steps.indexOf(maxQuality).coerceAtLeast(0) + 1) % steps.size]
+        store.maxQuality = maxQuality
+    }
+
     fun closePlayer() {
         playingIndex = -1
     }

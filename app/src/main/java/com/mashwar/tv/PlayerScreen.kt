@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -204,6 +205,15 @@ fun PlayerScreen(vm: MainViewModel) {
         interaction++
     }
 
+    // Quality cap: lower resolution = fewer stalls on weak networks. 0 means automatic.
+    LaunchedEffect(player, vm.maxQuality) {
+        val p = player ?: return@LaunchedEffect
+        val q = vm.maxQuality
+        val b = p.trackSelectionParameters.buildUpon()
+        if (q == 0) b.clearVideoSizeConstraints() else b.setMaxVideoSize(Int.MAX_VALUE, q)
+        p.trackSelectionParameters = b.build()
+    }
+
     LaunchedEffect(errorTick) {
         if (errorTick == 0) return@LaunchedEffect
         delay(2_500)
@@ -298,6 +308,15 @@ fun PlayerScreen(vm: MainViewModel) {
                     IconButton(onClick = { vm.toggleFavorite(channel); interaction++ }, Modifier.size(iconBtn)) {
                         Icon(if (fav) Icons.Filled.Star else Icons.Filled.StarBorder, "مفضلة",
                             tint = if (fav) MaterialTheme.colorScheme.secondary else Color.White, modifier = Modifier.size(icon))
+                    }
+                    Row(
+                        Modifier.clickable { vm.cycleQuality(); interaction++ }.padding(horizontal = 6.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val label = if (vm.maxQuality == 0) "تلقائي" else "${vm.maxQuality}p"
+                        Icon(Icons.Filled.HighQuality, "الجودة: $label", tint = Color.White, modifier = Modifier.size(icon))
+                        Spacer(Modifier.size(4.dp))
+                        Text(label, color = Color.White, fontSize = if (compact) 11.sp else 16.sp)
                     }
                     Row(
                         Modifier.clickable { resizeIdx = (resizeIdx + 1) % RESIZE_MODES.size; interaction++ }.padding(8.dp),

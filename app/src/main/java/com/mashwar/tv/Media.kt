@@ -17,6 +17,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 
 private const val EXTRA_UA = "mashwar.ua"
@@ -108,7 +109,8 @@ fun folderItem(id: String, title: String): MediaItem =
 /** Builds each source with that channel's own User-Agent / Referer (applies to HLS segments too). */
 class ChannelSourceFactory(private val context: Context) : MediaSource.Factory {
     private var drm: DrmSessionManagerProvider? = null
-    private var errorPolicy: LoadErrorHandlingPolicy? = null
+    // IPTV servers drop segment requests a lot: retry each load more before failing.
+    private var errorPolicy: LoadErrorHandlingPolicy = DefaultLoadErrorHandlingPolicy(8)
 
     override fun setDrmSessionManagerProvider(drmSessionManagerProvider: DrmSessionManagerProvider): MediaSource.Factory {
         drm = drmSessionManagerProvider
@@ -133,7 +135,7 @@ class ChannelSourceFactory(private val context: Context) : MediaSource.Factory {
         extras?.getString(EXTRA_REF)?.let { http.setDefaultRequestProperties(mapOf("Referer" to it)) }
         val factory = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http))
         drm?.let { factory.setDrmSessionManagerProvider(it) }
-        errorPolicy?.let { factory.setLoadErrorHandlingPolicy(it) }
+        factory.setLoadErrorHandlingPolicy(errorPolicy)
         return factory.createMediaSource(mediaItem)
     }
 }
