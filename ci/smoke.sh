@@ -23,10 +23,21 @@ PY
   if [ -n "$B" ]; then echo "tap '$1' at $B"; adb shell input tap $B; else echo "NOT FOUND: $1"; fi
 }
 
+# screen <label>: print what is visible right now
+screen() {
+  adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
+  adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
+  echo "--- SCREEN [$1]: $(python3 -c "
+import re;x=open('ui.xml',encoding='utf-8').read()
+print(' | '.join(t for t in re.findall(r'(?:text|content-desc)=\"([^\"]+)\"',x) if t)[:400])")"
+}
+adb shell wm size
 adb shell am start -W -n com.mashwar.tv/.MainActivity
 sleep 6
+screen home
 tap "جرّب بقائمة تجريبية"
 sleep 6
+screen channels
 adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
 FIRST=$(python3 - <<'PY'
 import re
@@ -43,10 +54,14 @@ PY
 )
 echo "first channel at $FIRST"; [ -n "$FIRST" ] && adb shell input tap $FIRST
 sleep 15
-adb shell input tap 540 400     # show controls
-sleep 2
+screen player
+W=$(adb shell wm size | grep -o '[0-9]*x[0-9]*' | tail -1); X=$(( ${W%x*} / 2 )); Y=$(( ${W#*x} / 2 ))
+adb shell input tap $X $Y     # show controls
+sleep 1
+screen player-controls
 tap "القنوات"
 sleep 4
+screen channel-panel
 adb shell input keyevent KEYCODE_BACK
 sleep 2
 adb shell input keyevent KEYCODE_BACK
@@ -55,7 +70,7 @@ adb shell input keyevent KEYCODE_HOME
 sleep 6
 
 adb logcat -d > logcat.txt
-grep -E "mashwar|Kenue" logcat.txt | grep -iE "error|exception|E/" | head -20
+grep -E " E |W/System.err| E/" logcat.txt | grep -iE "mashwar|media3|exoplayer|cast|AndroidRuntime" | head -30
 if grep -q "FATAL EXCEPTION" logcat.txt; then
   echo "=========== CRASH ==========="
   grep -A60 "FATAL EXCEPTION" logcat.txt > crash.txt
