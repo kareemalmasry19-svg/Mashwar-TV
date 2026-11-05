@@ -7,8 +7,10 @@ adb logcat -c
 
 # tap <text>: find a UI element by visible text (or content-desc) and tap its centre.
 tap() {
-  adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
-  adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
+  if [ "$2" != "nodump" ]; then
+    adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
+    adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
+  fi
   B=$(python3 - "$1" <<'PY'
 import re, sys
 t = sys.argv[1]; x = open("ui.xml", encoding="utf-8").read()
@@ -62,15 +64,16 @@ W=$(adb shell wm size | grep -o '[0-9]*x[0-9]*' | tail -1)
 adb shell input tap 20 $(( ${W%x*} / 3 ))      # toggle controls (either orientation)
 sleep 1
 screen player-controls
-tap "القنوات"
+tap "القنوات" nodump
 sleep 3
 screen channel-panel
 adb shell input keyevent KEYCODE_BACK
-sleep 1
+sleep 2
+screen after-panel-back
 adb shell input tap 20 $(( ${W%x*} / 3 ))
 sleep 1
 screen before-cast
-tap "~cast"
+tap "~cast" nodump
 sleep 6
 screen after-cast
 adb shell input keyevent KEYCODE_BACK
