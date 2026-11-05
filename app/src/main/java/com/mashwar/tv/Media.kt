@@ -51,6 +51,15 @@ fun nextFormatAttempt(item: MediaItem): MediaItem? {
         .build()
 }
 
+fun guessMime(url: String): String? {
+    val u = url.lowercase()
+    return when {
+        "m3u8" in u -> MimeTypes.APPLICATION_M3U8
+        ".mpd" in u -> MimeTypes.APPLICATION_MPD
+        else -> null
+    }
+}
+
 /**
  * A playable MediaItem for a channel. The URL and HTTP headers also travel in
  * requestMetadata, because that part survives being sent from a controller
