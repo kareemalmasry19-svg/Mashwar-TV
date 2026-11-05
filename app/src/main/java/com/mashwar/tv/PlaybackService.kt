@@ -49,6 +49,16 @@ class PlaybackService : MediaLibraryService() {
                 if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     player.seekToDefaultPosition()
                     player.prepare()
+                    return
+                }
+                // Many IPTV links hide the real format (e.g. HLS behind ".php" or no extension):
+                // try the item again as another format before reporting the error.
+                if (error.errorCode in FORMAT_ERRORS) {
+                    val i = player.currentMediaItemIndex
+                    val retry = player.currentMediaItem?.let { nextFormatAttempt(it) } ?: return
+                    player.replaceMediaItem(i, retry)
+                    player.prepare()
+                    player.play()
                 }
             }
         })

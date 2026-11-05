@@ -10,6 +10,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -20,14 +21,34 @@ import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 
 private const val EXTRA_UA = "mashwar.ua"
 private const val EXTRA_REF = "mashwar.ref"
+private const val EXTRA_TRY = "mashwar.try"
+private const val EXTRA_MIME0 = "mashwar.mime0"
 
-fun guessMime(url: String): String? {
-    val u = url.lowercase()
-    return when {
-        "m3u8" in u -> MimeTypes.APPLICATION_M3U8
-        ".mpd" in u -> MimeTypes.APPLICATION_MPD
-        else -> null
-    }
+val FORMAT_ERRORS = setOf(
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+    PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+)
+
+/**
+ * Same channel, next stream format to try (HLS → plain stream/TS → DASH), skipping the
+ * one that just failed. Returns null when every format has been tried.
+ */
+fun nextFormatAttempt(item: MediaItem): MediaItem? {
+    val rm = item.requestMetadata
+    val extras = Bundle(rm.extras ?: Bundle())
+    val attempt = extras.getInt(EXTRA_TRY, 0)
+    // Remember the first guess so every later attempt skips it.
+    if (attempt == 0) extras.putString(EXTRA_MIME0, item.localConfiguration?.mimeType ?: "")
+    val first = extras.getString(EXTRA_MIME0)?.ifEmpty { null }
+    val candidates = listOf(MimeTypes.APPLICATION_M3U8, null, MimeTypes.APPLICATION_MPD).filter { it != first }
+    if (attempt >= candidates.size) return null
+    extras.putInt(EXTRA_TRY, attempt + 1)
+    return item.buildUpon()
+        .setMimeType(candidates[attempt])
+        .setRequestMetadata(rm.buildUpon().setExtras(extras).build())
+        .build()
 }
 
 /**
