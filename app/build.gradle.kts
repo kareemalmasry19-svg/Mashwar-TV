@@ -12,8 +12,19 @@ android {
         applicationId = "com.mashwar.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = 5
+        versionName = "0.2.3"
+    }
+
+    // One fixed signing key for every build (CI included), so new versions
+    // install over old ones without uninstalling. Test key only — not for Play Store.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("mashwar-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
