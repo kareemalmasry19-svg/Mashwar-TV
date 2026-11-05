@@ -532,42 +532,51 @@ private fun ChannelPanel(vm: MainViewModel, compact: Boolean, onPick: (Int) -> U
 @Composable
 private fun TvPickerDialog(onDismiss: () -> Unit, onPick: (DlnaDevice) -> Unit) {
     val ctx = LocalContext.current
-    var devices by remember { mutableStateOf<List<DlnaDevice>?>(null) }
+    var scan by remember { mutableStateOf<DlnaCast.Scan?>(null) }
     var round by remember { mutableIntStateOf(0) }
     LaunchedEffect(round) {
-        devices = null
-        devices = runCatching { DlnaCast.discover(ctx) }.getOrDefault(emptyList())
+        scan = null
+        scan = runCatching { DlnaCast.discover(ctx) }.getOrElse { DlnaCast.Scan(emptyList(), true, 0, emptyList()) }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("اعرض على الشاشة") },
         text = {
             Column {
-                when (val list = devices) {
-                    null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                val r = scan
+                when {
+                    r == null -> Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(24.dp), color = Gold, strokeWidth = 2.dp)
                         Spacer(Modifier.size(12.dp))
                         Text("بدوّر على الشاشات اللي على نفس الواي فاي…")
                     }
-                    else -> if (list.isEmpty()) {
-                        Text("مالقيتش شاشات.\nاتأكد إن الشاشة شغالة وعلى نفس الواي فاي.\nفي سامسونج: الإعدادات ▸ عام ▸ إدارة الأجهزة الخارجية ▸ مدير اتصال الأجهزة ▸ فعّل الوصول.")
-                    } else {
-                        list.forEach { d ->
-                            Row(
-                                Modifier.fillMaxWidth().clickable { onPick(d) }.padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(Icons.Filled.ConnectedTv, null, tint = Gold)
-                                Spacer(Modifier.size(12.dp))
-                                Text(d.name, fontSize = 17.sp)
-                            }
+                    r.devices.isNotEmpty() -> r.devices.forEach { d ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onPick(d) }.padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Filled.ConnectedTv, null, tint = Gold)
+                            Spacer(Modifier.size(12.dp))
+                            Text(d.name, fontSize = 17.sp)
                         }
                     }
+                    !r.wifi -> Text("الموبايل مش متوصل بواي فاي. وصّله بنفس شبكة الشاشة وجرّب تاني.")
+                    r.responders == 0 -> Text(
+                        "مفيش أي جهاز رد على الشبكة.\n" +
+                            "• اتأكد إن الشاشة شغالة (مش Standby) وعلى نفس الواي فاي.\n" +
+                            "• لو الراوتر فيه Guest Wi-Fi أو AP Isolation، اقفله.\n" +
+                            "• في سامسونج: الإعدادات ▸ عام ▸ إدارة الأجهزة الخارجية ▸ مدير اتصال الأجهزة ▸ إشعار الوصول: فعّله."
+                    )
+                    else -> Text(
+                        "لقيت ${r.responders} جهاز على الشبكة، بس ولا واحد فيهم قبل عرض فيديو" +
+                            (if (r.others.isNotEmpty()) ":\n" + r.others.take(6).joinToString("\n") { "• $it" } else ".") +
+                            "\n\nلو شاشتك في القائمة دي، فعّل في الشاشة: إدارة الأجهزة الخارجية ▸ مدير اتصال الأجهزة."
+                    )
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { round++ }, enabled = devices != null) { Text("دوّر تاني") }
+            TextButton(onClick = { round++ }, enabled = scan != null) { Text("دوّر تاني") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } },
     )

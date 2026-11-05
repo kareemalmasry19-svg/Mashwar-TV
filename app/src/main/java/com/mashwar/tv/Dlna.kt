@@ -11,7 +11,12 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import java.net.DatagramPacket
+import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.InetAddress
 import java.net.MulticastSocket
 import java.net.SocketTimeoutException
@@ -38,37 +43,95 @@ object DlnaCast {
 
     private const val AVT = "urn:schemas-upnp-org:service:AVTransport:1"
 
-    suspend fun discover(context: Context, waitMs: Int = 4_000): List<DlnaDevice> = withContext(Dispatchers.IO) {
-        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    /** What the last search saw, so the picker can say *why* nothing showed up. */
+    data class Scan(val devices: List<DlnaDevice>, val wifi: Boolean, val responders: Int, val others: List<String>)
+
+    suspend fun discover(context: Context, waitMs: Int = 5_000): Scan = withContext(Dispatchers.IO) {
+        val app = context.applicationContext
+        val wifiAddr = wifiAddress(app) ?: return@withContext Scan(emptyList(), wifi = false, responders = 0, others = emptyList())
+        val wifi = app.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val lock = wifi.createMulticastLock("kenue-dlna").apply { setReferenceCounted(false); acquire() }
-        val locations = LinkedHashSet<String>()
+        val locations = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+        val responders = java.util.Collections.synchronizedSet(HashSet<String>())
+        val group = InetAddress.getByName("239.255.255.250")
+        val nif = NetworkInterface.getByInetAddress(wifiAddr)
+        fun collect(text: String, from: InetAddress) {
+            responders += from.hostAddress ?: return
+            Regex("(?im)^location:\\s*(\\S+)").find(text)?.groupValues?.get(1)?.let { locations += it }
+        }
+        // Also listen for the TVs' own periodic announcements (NOTIFY) on port 1900.
+        val listener = runCatching {
+            MulticastSocket(1900).apply {
+                reuseAddress = true
+                soTimeout = 500
+                joinGroup(InetSocketAddress(group, 1900), nif)
+            }
+        }.getOrNull()
+        val listenThread = listener?.let { ls ->
+            Thread {
+                val buf = ByteArray(4096)
+                val end = System.currentTimeMillis() + waitMs
+                while (System.currentTimeMillis() < end) {
+                    val p = DatagramPacket(buf, buf.size)
+                    try { ls.receive(p) } catch (_: Exception) { continue }
+                    collect(String(p.data, 0, p.length), p.address)
+                }
+            }.apply { start() }
+        }
         try {
-            MulticastSocket().use { sock ->
-                sock.soTimeout = 600
-                val group = InetAddress.getByName("239.255.255.250")
-                for (st in listOf("urn:schemas-upnp-org:device:MediaRenderer:1", AVT)) {
-                    val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $st\r\n\r\n"
-                    val bytes = msg.toByteArray()
-                    repeat(2) { sock.send(DatagramPacket(bytes, bytes.size, group, 1900)) }
+            // Search from the Wi-Fi interface explicitly (phones with mobile data on may pick the wrong one).
+            MulticastSocket(InetSocketAddress(wifiAddr, 0)).use { sock ->
+                sock.soTimeout = 500
+                sock.timeToLive = 4
+                nif?.let { sock.networkInterface = it }
+                val targets = listOf(
+                    "urn:schemas-upnp-org:device:MediaRenderer:1", AVT, "upnp:rootdevice", "ssdp:all",
+                )
+                repeat(2) {
+                    for (st in targets) {
+                        val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: $st\r\nUSER-AGENT: Android UPnP/1.1 KenueTV/0.5\r\n\r\n"
+                        val bytes = msg.toByteArray()
+                        sock.send(DatagramPacket(bytes, bytes.size, group, 1900))
+                    }
                 }
                 val buf = ByteArray(4096)
                 val end = System.currentTimeMillis() + waitMs
                 while (System.currentTimeMillis() < end) {
                     val p = DatagramPacket(buf, buf.size)
                     try { sock.receive(p) } catch (_: SocketTimeoutException) { continue }
-                    val text = String(p.data, 0, p.length)
-                    Regex("(?im)^location:\\s*(\\S+)").find(text)?.groupValues?.get(1)?.let { locations += it }
+                    collect(String(p.data, 0, p.length), p.address)
                 }
             }
         } finally {
+            listenThread?.join(waitMs.toLong() + 1_000)
+            runCatching { listener?.close() }
             lock.release()
         }
-        locations.mapNotNull { describe(it) }.distinctBy { it.controlUrl }
+        val described = locations.toList().take(40).mapNotNull { describeAny(it) }
+        val devices = described.mapNotNull { it.first }.distinctBy { it.controlUrl }
+        val others = described.filter { it.first == null }.map { it.second }.distinct()
+        Scan(devices, wifi = true, responders = responders.size, others = others)
     }
 
-    /** Reads the device description and finds its AVTransport control URL. */
-    private fun describe(location: String): DlnaDevice? = runCatching {
+    /** IPv4 address of the phone on the current Wi-Fi network, or null when not on Wi-Fi. */
+    private fun wifiAddress(ctx: Context): InetAddress? {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val net = cm.allNetworks.firstOrNull { n ->
+            cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        } ?: return null
+        return cm.getLinkProperties(net)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address }
+    }
+
+    /** (renderer, name) — renderer is null for devices that can't play videos (routers, speakers…). */
+    private fun describeAny(location: String): Pair<DlnaDevice?, String>? = runCatching {
         val xml = http.newCall(Request.Builder().url(location).build()).execute().use { it.body?.string() } ?: return null
+        val name = Regex("<friendlyName>(.*?)</friendlyName>", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.get(1)?.trim()
+            ?.let(::unescape) ?: "جهاز"
+        describe(location, xml) to name
+    }.getOrNull()
+
+    /** Reads the device description and finds its AVTransport control URL. */
+    private fun describe(location: String, xml: String): DlnaDevice? = runCatching {
         val name = Regex("<friendlyName>(.*?)</friendlyName>", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.get(1)?.trim()
             ?: "TV"
         val service = Regex("<service>(.*?)</service>", RegexOption.DOT_MATCHES_ALL).findAll(xml)
