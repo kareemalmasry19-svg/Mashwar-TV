@@ -60,16 +60,15 @@ class PlaybackService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
-            // Bigger buffer than the default (50s max) so short network drops don't stall playback.
+            // Moderate buffer: enough to ride out short drops without hogging memory; quick channel start.
             .setLoadControl(
                 DefaultLoadControl.Builder()
                     .setBufferDurationsMs(
-                        /* minBufferMs = */ 30_000,
-                        /* maxBufferMs = */ 120_000,
-                        /* bufferForPlaybackMs = */ 2_500,
-                        /* bufferForPlaybackAfterRebufferMs = */ 6_000,
+                        /* minBufferMs = */ 20_000,
+                        /* maxBufferMs = */ 50_000,
+                        /* bufferForPlaybackMs = */ 1_500,
+                        /* bufferForPlaybackAfterRebufferMs = */ 4_000,
                     )
-                    .setPrioritizeTimeOverSizeThresholds(true)
                     .build()
             )
             .build()

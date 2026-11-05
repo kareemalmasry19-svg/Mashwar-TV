@@ -13,7 +13,10 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -106,6 +109,18 @@ fun folderItem(id: String, title: String): MediaItem =
         )
         .build()
 
+/** One HTTP client for all streams: keeps connections open between HLS segments. */
+private val sharedHttp: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+        .retryOnConnectionFailure(true)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+}
+
 /** Builds each source with that channel's own User-Agent / Referer (applies to HLS segments too). */
 class ChannelSourceFactory(private val context: Context) : MediaSource.Factory {
     private var drm: DrmSessionManagerProvider? = null
@@ -127,11 +142,7 @@ class ChannelSourceFactory(private val context: Context) : MediaSource.Factory {
 
     override fun createMediaSource(mediaItem: MediaItem): MediaSource {
         val extras = mediaItem.requestMetadata.extras
-        val http = DefaultHttpDataSource.Factory()
-            .setUserAgent(extras?.getString(EXTRA_UA) ?: DEFAULT_UA)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(20_000)
+        val http = OkHttpDataSource.Factory(sharedHttp).setUserAgent(extras?.getString(EXTRA_UA) ?: DEFAULT_UA)
         extras?.getString(EXTRA_REF)?.let { http.setDefaultRequestProperties(mapOf("Referer" to it)) }
         val factory = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http))
         drm?.let { factory.setDrmSessionManagerProvider(it) }

@@ -23,6 +23,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.ConnectedTv
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -182,6 +187,15 @@ fun PlayerScreen(vm: MainViewModel) {
     var retryKey by remember { mutableIntStateOf(0) }
     var errorTick by remember { mutableIntStateOf(0) }
     var showList by remember { mutableStateOf(false) }
+    var showTvPicker by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val dlna = DlnaCast.active
+    // While a TV is showing the channel, keep the phone quiet and follow channel changes on the TV.
+    LaunchedEffect(vm.playingIndex) {
+        val tv = DlnaCast.active ?: return@LaunchedEffect
+        player?.pause()
+        vm.nowPlaying?.let { ch -> DlnaCast.play(tv, ch) }
+    }
 
     // Name of the TV we're casting to, or null when playing on the phone.
     var castDevice by remember { mutableStateOf<String?>(null) }
@@ -302,7 +316,32 @@ fun PlayerScreen(vm: MainViewModel) {
         )
 
         if (buffering && error == null) {
-            if (castDevice == null) CircularProgressIndicator(Modifier.align(Alignment.Center).size(64.dp), color = Gold)
+            if (castDevice == null && dlna == null) CircularProgressIndicator(Modifier.align(Alignment.Center).size(64.dp), color = Gold)
+        }
+        dlna?.let { tv ->
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Filled.ConnectedTv, null, tint = Gold, modifier = Modifier.size(if (compact) 48.dp else 72.dp))
+                Spacer(Modifier.height(8.dp))
+                Text("بيتعرض على ${tv.name}", color = Cream, fontSize = if (compact) 15.sp else 20.sp)
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = { scope.launch { DlnaCast.stop(); player?.play() } }) {
+                    Text("وقّف العرض على الشاشة", color = GoldLight)
+                }
+            }
+        }
+        if (showTvPicker) {
+            TvPickerDialog(
+                onDismiss = { showTvPicker = false },
+                onPick = { tv ->
+                    showTvPicker = false
+                    val ch = vm.nowPlaying ?: return@TvPickerDialog
+                    scope.launch {
+                        val err = DlnaCast.play(tv, ch)
+                        if (err == null) player?.pause()
+                        else { error = "الشاشة مقبلتش القناة\n$err"; showControls = true }
+                    }
+                },
+            )
         }
         castDevice?.let { name ->
             Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -362,6 +401,10 @@ fun PlayerScreen(vm: MainViewModel) {
                         Icon(Icons.AutoMirrored.Filled.List, "القنوات", tint = Color.White, modifier = Modifier.size(icon))
                     }
                     CastButton(Modifier.size(iconBtn))
+                    IconButton(onClick = { showTvPicker = true; interaction++ }, Modifier.size(iconBtn)) {
+                        Icon(Icons.Filled.ConnectedTv, "اعرض على شاشة سامسونج / LG",
+                            tint = if (dlna != null) Gold else Color.White, modifier = Modifier.size(icon))
+                    }
                     Row(
                         Modifier.clickable { vm.cycleQuality(); interaction++ }.padding(horizontal = 6.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -483,6 +526,51 @@ private fun ChannelPanel(vm: MainViewModel, compact: Boolean, onPick: (Int) -> U
             }
         }
     }
+}
+
+/** Looks for DLNA TVs on the Wi-Fi (Samsung, LG, Sony…) and lets the user pick one. */
+@Composable
+private fun TvPickerDialog(onDismiss: () -> Unit, onPick: (DlnaDevice) -> Unit) {
+    val ctx = LocalContext.current
+    var devices by remember { mutableStateOf<List<DlnaDevice>?>(null) }
+    var round by remember { mutableIntStateOf(0) }
+    LaunchedEffect(round) {
+        devices = null
+        devices = runCatching { DlnaCast.discover(ctx) }.getOrDefault(emptyList())
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("اعرض على الشاشة") },
+        text = {
+            Column {
+                when (val list = devices) {
+                    null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(24.dp), color = Gold, strokeWidth = 2.dp)
+                        Spacer(Modifier.size(12.dp))
+                        Text("بدوّر على الشاشات اللي على نفس الواي فاي…")
+                    }
+                    else -> if (list.isEmpty()) {
+                        Text("مالقيتش شاشات.\nاتأكد إن الشاشة شغالة وعلى نفس الواي فاي.\nفي سامسونج: الإعدادات ▸ عام ▸ إدارة الأجهزة الخارجية ▸ مدير اتصال الأجهزة ▸ فعّل الوصول.")
+                    } else {
+                        list.forEach { d ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable { onPick(d) }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Filled.ConnectedTv, null, tint = Gold)
+                                Spacer(Modifier.size(12.dp))
+                                Text(d.name, fontSize = 17.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { round++ }, enabled = devices != null) { Text("دوّر تاني") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } },
+    )
 }
 
 /** Standard Cast button (finds Chromecast / Google TV devices on the Wi-Fi). */
