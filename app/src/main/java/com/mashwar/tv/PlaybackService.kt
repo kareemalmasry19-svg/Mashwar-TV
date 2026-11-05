@@ -24,6 +24,9 @@ import androidx.media3.session.MediaSession
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.ListeningExecutorService
+import com.google.common.util.concurrent.MoreExecutors
+import java.util.concurrent.Executors
 
 /**
  * One player for everything: the phone screen, the notification, and Android Auto
@@ -33,6 +36,8 @@ class PlaybackService : MediaLibraryService() {
     private var session: MediaLibrarySession? = null
     private val handler = Handler(Looper.getMainLooper())
     private var reconnects = 0
+    /** All ChannelLibrary work runs here (big playlists would freeze the car screen on the main thread). */
+    private val bg: ListeningExecutorService = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor())
     private lateinit var library: ChannelLibrary
 
     override fun onCreate() {
@@ -112,6 +117,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        bg.shutdown()
         session?.run {
             player.release()
             release()
@@ -133,14 +139,16 @@ class PlaybackService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<MediaItem>> {
-            library.reload() // pick up playlists/favourites changed in the phone UI
             val rootExtras = Bundle().apply {
                 putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1) // list
                 putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1)  // list
                 putBoolean("android.media.browse.SEARCH_SUPPORTED", true)
             }
             val outParams = LibraryParams.Builder().setExtras(rootExtras).build()
-            return done(LibraryResult.ofItem(library.root(), outParams))
+            return bg.submit<LibraryResult<MediaItem>> {
+                library.reload() // pick up playlists/favourites changed in the phone UI
+                LibraryResult.ofItem(library.root(), outParams)
+            }
         }
 
         override fun onGetItem(
@@ -148,9 +156,10 @@ class PlaybackService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             mediaId: String,
         ): ListenableFuture<LibraryResult<MediaItem>> {
-            val item = library.item(mediaId)
-                ?: return done(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
-            return done(LibraryResult.ofItem(item, null))
+            return bg.submit<LibraryResult<MediaItem>> {
+                library.item(mediaId)?.let { LibraryResult.ofItem(it, null) }
+                    ?: LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+            }
         }
 
         override fun onGetChildren(
@@ -161,9 +170,10 @@ class PlaybackService : MediaLibraryService() {
             pageSize: Int,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            val kids = library.children(parentId)
-                ?: return done(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
-            return done(LibraryResult.ofItemList(page(kids, page, pageSize), params))
+            return bg.submit<LibraryResult<ImmutableList<MediaItem>>> {
+                library.children(parentId)?.let { LibraryResult.ofItemList(page(it, page, pageSize), params) }
+                    ?: LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+            }
         }
 
         override fun onSearch(
@@ -172,7 +182,10 @@ class PlaybackService : MediaLibraryService() {
             query: String,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> {
-            session.notifySearchResultChanged(browser, query, library.search(query).size, params)
+            bg.execute {
+                val n = library.search(query).size
+                handler.post { session.notifySearchResultChanged(browser, query, n, params) }
+            }
             return done(LibraryResult.ofVoid())
         }
 
@@ -184,14 +197,16 @@ class PlaybackService : MediaLibraryService() {
             pageSize: Int,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
-            done(LibraryResult.ofItemList(page(library.search(query), page, pageSize), params))
+            bg.submit<LibraryResult<ImmutableList<MediaItem>>> {
+                LibraryResult.ofItemList(page(library.search(query), page, pageSize), params)
+            }
 
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> =
-            done(expand(mediaItems).first.toMutableList())
+            bg.submit<MutableList<MediaItem>> { expand(mediaItems).first.toMutableList() }
 
         override fun onSetMediaItems(
             mediaSession: MediaSession,
@@ -200,9 +215,11 @@ class PlaybackService : MediaLibraryService() {
             startIndex: Int,
             startPositionMs: Long,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val (items, expandedStart) = expand(mediaItems)
-            val start = expandedStart ?: startIndex.takeIf { it in items.indices } ?: 0
-            return done(MediaSession.MediaItemsWithStartPosition(items, start, C.TIME_UNSET))
+            return bg.submit<MediaSession.MediaItemsWithStartPosition> {
+                val (items, expandedStart) = expand(mediaItems)
+                val start = expandedStart ?: startIndex.takeIf { it in items.indices } ?: 0
+                MediaSession.MediaItemsWithStartPosition(items, start, C.TIME_UNSET)
+            }
         }
 
         /**

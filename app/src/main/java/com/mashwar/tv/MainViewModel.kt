@@ -46,20 +46,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun addSample() = savePlaylist("قائمة تجريبية", "sample", false, SAMPLE_PLAYLIST)
+    fun addSample() = viewModelScope.launch { savePlaylist("قائمة تجريبية", "sample", false, SAMPLE_PLAYLIST) }
 
-    private fun savePlaylist(name: String, source: String, isUri: Boolean, text: String) {
-        val parsed = M3uParser.parse(text)
+    private suspend fun savePlaylist(name: String, source: String, isUri: Boolean, text: String) {
+        val parsed = withContext(Dispatchers.Default) { M3uParser.parse(text) }
         if (parsed.isEmpty()) {
             message = "الملف ده مفيهوش قنوات (اتأكد إنه M3U)"
             return
         }
         val p = Playlist(UUID.randomUUID().toString(), name.ifBlank { "قائمة ${playlists.size + 1}" }, source, isUri)
-        store.saveRaw(p.id, text)
+        withContext(Dispatchers.IO) { store.saveRaw(p.id, text) }
         playlists = playlists + p
         store.savePlaylists(playlists)
         message = "اتضافت ${parsed.size} قناة"
-        open(p)
+        channels = parsed // already parsed: open straight away
+        current = p
     }
 
     fun open(p: Playlist) = viewModelScope.launch {
@@ -74,11 +75,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         loading = true
         try {
             val text = fetchPlaylistText(getApplication(), p.source, p.isUri)
-            val n = M3uParser.parse(text).size
-            if (n == 0) error("القائمة الجديدة فاضية")
-            store.saveRaw(p.id, text)
-            message = "اتحدّثت: $n قناة"
-            if (current?.id == p.id) open(p)
+            val parsed = withContext(Dispatchers.Default) { M3uParser.parse(text) }
+            if (parsed.isEmpty()) error("القائمة الجديدة فاضية")
+            withContext(Dispatchers.IO) { store.saveRaw(p.id, text) }
+            message = "اتحدّثت: ${parsed.size} قناة"
+            if (current?.id == p.id) channels = parsed
         } catch (e: Exception) {
             message = "التحديث فشل: ${e.message}"
         } finally {

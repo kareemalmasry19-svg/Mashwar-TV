@@ -10,7 +10,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-const val DEFAULT_UA = "MashwarTV/0.1 (Android) ExoPlayer"
+const val DEFAULT_UA = "KenueTV/0.3 (Android) ExoPlayer"
 const val GROUP_DEFAULT = "عام"
 
 data class Channel(

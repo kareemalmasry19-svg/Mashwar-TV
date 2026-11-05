@@ -180,7 +180,7 @@ class ChannelLibrary(context: Context) {
         }
     }
 
-    fun root(): MediaItem = folderItem(ROOT, "مشوار TV")
+    fun root(): MediaItem = folderItem(ROOT, "Kenue TV")
 
     fun item(id: String): MediaItem? = when {
         id == ROOT -> root()

@@ -55,7 +55,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,7 +95,7 @@ fun HomeScreen(vm: MainViewModel) {
 
     Scaffold(
         topBar = {
-            CenterAlignedTopAppBar(title = { Text("مشوار TV", fontWeight = FontWeight.Bold) })
+            CenterAlignedTopAppBar(title = { Text("Kenue TV", fontWeight = FontWeight.Bold) })
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -212,10 +216,18 @@ fun ChannelsScreen(vm: MainViewModel) {
     var query by remember { mutableStateOf("") }
     var group by remember { mutableStateOf(ALL) }
     val groups = remember(vm.channels) { listOf(ALL, FAVS) + vm.channels.map { it.group }.distinct() }
-    val filtered = remember(vm.channels, query, group, vm.favorites) {
-        vm.channels.filter { c ->
-            (group == ALL || (group == FAVS && c.url in vm.favorites) || c.group == group) &&
-                (query.isBlank() || c.name.contains(query.trim(), ignoreCase = true))
+    // Filtering thousands of channels on every keystroke janks the UI: do it off the main thread.
+    val filtered by produceState(vm.channels, vm.channels, query, group, vm.favorites) {
+        if (query.isNotBlank()) delay(150)
+        val all = vm.channels
+        val favs = vm.favorites
+        val q = query.trim()
+        value = withContext(Dispatchers.Default) {
+            if (group == ALL && q.isEmpty()) all
+            else all.filter { c ->
+                (group == ALL || (group == FAVS && c.url in favs) || c.group == group) &&
+                    (q.isEmpty() || c.name.contains(q, ignoreCase = true))
+            }
         }
     }
 
@@ -264,7 +276,7 @@ fun ChannelsScreen(vm: MainViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-                itemsIndexed(filtered, key = { i, c -> "$i-${c.url}" }) { i, c ->
+                itemsIndexed(filtered, key = { i, c -> "$i-${c.url}" }, contentType = { _, _ -> "channel" }) { i, c ->
                     ChannelRow(c, c.url in vm.favorites, onFav = { vm.toggleFavorite(c) }) { vm.play(filtered, i) }
                 }
             }

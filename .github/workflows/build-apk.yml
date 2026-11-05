@@ -17,19 +17,20 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      - run: chmod +x gradlew && ./gradlew assembleDebug --stacktrace
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MashwarTV-debug.apk
+      - run: chmod +x gradlew && ./gradlew assembleRelease --stacktrace
+      - run: cp app/build/outputs/apk/release/app-release.apk KenueTV.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: MashwarTV-apk
-          path: MashwarTV-debug.apk
-      # Direct download link: Releases ▸ latest (tag "latest-debug" is replaced on every build)
+          name: KenueTV-apk
+          path: KenueTV.apk
+      # Direct download link: Releases ▸ latest (tag "latest" is replaced on every build)
       - name: Publish release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest-debug --yes --cleanup-tag || true
-          gh release create latest-debug MashwarTV-debug.apk \
-            --title "MashwarTV debug (${GITHUB_SHA::7})" \
-            --notes "آخر نسخة تجريبية متبنية من main." --latest
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest KenueTV.apk \
+            --title "Kenue TV (${GITHUB_SHA::7})" \
+            --notes "آخر نسخة متبنية من main." --latest
