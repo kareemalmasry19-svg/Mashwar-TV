@@ -12,6 +12,29 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
+import androidx.appcompat.view.ContextThemeWrapper
+import androidx.mediarouter.app.MediaRouteButton
+import coil.compose.AsyncImage
+import com.google.android.gms.cast.framework.CastButtonFactory
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastState
+import com.google.android.gms.cast.framework.CastStateListener
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -104,8 +127,11 @@ private fun rememberMediaController(): MediaController? {
         val future = MediaController.Builder(ctx, token).buildAsync()
         future.addListener({ controller = runCatching { future.get() }.getOrNull() }, ContextCompat.getMainExecutor(ctx))
         onDispose {
-            controller?.stop()
-            controller?.clearMediaItems()
+            val casting = runCatching { CastContext.getSharedInstance(ctx).castState == CastState.CONNECTED }.getOrDefault(false)
+            if (!casting) {
+                controller?.stop()
+                controller?.clearMediaItems()
+            }
             MediaController.releaseFuture(future)
             controller = null
         }
@@ -155,6 +181,22 @@ fun PlayerScreen(vm: MainViewModel) {
     var resizeIdx by remember { mutableIntStateOf(0) }
     var retryKey by remember { mutableIntStateOf(0) }
     var errorTick by remember { mutableIntStateOf(0) }
+    var showList by remember { mutableStateOf(false) }
+
+    // Name of the TV we're casting to, or null when playing on the phone.
+    var castDevice by remember { mutableStateOf<String?>(null) }
+    val castCtx = remember { runCatching { CastContext.getSharedInstance(ctx) }.getOrNull() }
+    DisposableEffect(castCtx) {
+        val cc = castCtx ?: return@DisposableEffect onDispose { }
+        val l = CastStateListener { st ->
+            castDevice = if (st == CastState.CONNECTED)
+                cc.sessionManager.currentCastSession?.castDevice?.friendlyName ?: "الشاشة" else null
+        }
+        cc.addCastStateListener(l)
+        l.onCastStateChanged(cc.castState)
+        onDispose { cc.removeCastStateListener(l) }
+    }
+    BackHandler(enabled = showList) { showList = false }
 
     // Full screen + landscape while the player is open; restore on exit.
     DisposableEffect(compact) {
@@ -233,7 +275,7 @@ fun PlayerScreen(vm: MainViewModel) {
 
     // Auto-hide controls after 4 seconds of no interaction.
     LaunchedEffect(showControls, interaction) {
-        if (showControls && error == null) {
+        if (showControls && error == null && !showList) {
             delay(4_000)
             showControls = false
         }
@@ -260,7 +302,14 @@ fun PlayerScreen(vm: MainViewModel) {
         )
 
         if (buffering && error == null) {
-            CircularProgressIndicator(Modifier.align(Alignment.Center).size(64.dp))
+            if (castDevice == null) CircularProgressIndicator(Modifier.align(Alignment.Center).size(64.dp), color = Gold)
+        }
+        castDevice?.let { name ->
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Filled.Cast, null, tint = Gold, modifier = Modifier.size(if (compact) 48.dp else 72.dp))
+                Spacer(Modifier.height(8.dp))
+                Text("بيتعرض على $name", color = Cream, fontSize = if (compact) 15.sp else 20.sp)
+            }
         }
         error?.let { msg ->
             val text = msg.substringBeforeLast('\n')
@@ -274,7 +323,7 @@ fun PlayerScreen(vm: MainViewModel) {
                 Spacer(Modifier.height(6.dp))
                 // Error code is English: lay it out left-to-right so brackets don't get scrambled.
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    Text(code, color = Color(0xFF90A4AE), fontSize = if (compact) 10.sp else 12.sp, textAlign = TextAlign.Center)
+                    Text(code, color = Muted, fontSize = if (compact) 10.sp else 12.sp, textAlign = TextAlign.Center)
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -301,14 +350,18 @@ fun PlayerScreen(vm: MainViewModel) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "رجوع", tint = Color.White, modifier = Modifier.size(icon))
                     }
                     Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                        Text(channel.name, color = Color.White, fontSize = if (compact) 16.sp else 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("${vm.playingIndex + 1} / ${vm.queue.size} • ${channel.group}", color = Color(0xFFB0BEC5), fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(channel.name, color = GoldLight, fontSize = if (compact) 16.sp else 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${vm.playingIndex + 1} / ${vm.queue.size} • ${channel.group}", color = Muted, fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     val fav = channel.url in vm.favorites
                     IconButton(onClick = { vm.toggleFavorite(channel); interaction++ }, Modifier.size(iconBtn)) {
                         Icon(if (fav) Icons.Filled.Star else Icons.Filled.StarBorder, "مفضلة",
                             tint = if (fav) MaterialTheme.colorScheme.secondary else Color.White, modifier = Modifier.size(icon))
                     }
+                    IconButton(onClick = { showList = true; interaction++ }, Modifier.size(iconBtn)) {
+                        Icon(Icons.AutoMirrored.Filled.List, "القنوات", tint = Color.White, modifier = Modifier.size(icon))
+                    }
+                    CastButton(Modifier.size(iconBtn))
                     Row(
                         Modifier.clickable { vm.cycleQuality(); interaction++ }.padding(horizontal = 6.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -347,15 +400,111 @@ fun PlayerScreen(vm: MainViewModel) {
                 }
             }
         }
+
+        // Receiver-style channel list: tap the list icon, pick a channel, keep watching.
+        if (showList) {
+            Box(
+                Modifier.fillMaxSize().background(Color(0x66000000)).clickable(
+                    interactionSource = remember { MutableInteractionSource() }, indication = null,
+                ) { showList = false },
+            )
+        }
+        AnimatedVisibility(
+            showList,
+            enter = slideInHorizontally { it } + fadeIn(),
+            exit = slideOutHorizontally { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.CenterStart),
+        ) {
+            ChannelPanel(
+                vm = vm,
+                compact = compact,
+                onPick = { i ->
+                    player?.seekTo(i, C.TIME_UNSET)
+                    player?.play()
+                    showList = false
+                    interaction++
+                },
+            )
+        }
     }
+}
+
+@Composable
+private fun ChannelPanel(vm: MainViewModel, compact: Boolean, onPick: (Int) -> Unit) {
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (vm.playingIndex - 3).coerceAtLeast(0))
+    Column(
+        Modifier.fillMaxHeight().width(if (compact) 250.dp else 340.dp)
+            .background(Color(0xF20A0A0B))
+            .border(1.dp, Gold.copy(alpha = 0.5f))
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
+        Text(
+            vm.nowPlaying?.group ?: "القنوات",
+            color = Gold, fontWeight = FontWeight.Bold, fontSize = if (compact) 15.sp else 18.sp,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        )
+        HorizontalDivider(color = Gold.copy(alpha = 0.35f))
+        LazyColumn(state = listState) {
+            itemsIndexed(vm.queue, key = { i, c -> "$i-${c.url}" }) { i, c ->
+                val selected = i == vm.playingIndex
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(if (selected) Gold.copy(alpha = 0.18f) else Color.Transparent)
+                        .clickable { onPick(i) }
+                        .padding(horizontal = 12.dp, vertical = if (compact) 6.dp else 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Text(
+                            String.format(Locale.US, "%03d", i + 1),
+                            color = if (selected) GoldLight else Gold.copy(alpha = 0.8f),
+                            fontFamily = FontFamily.Monospace, fontSize = if (compact) 12.sp else 14.sp,
+                            modifier = Modifier.width(if (compact) 34.dp else 40.dp),
+                        )
+                    }
+                    Box(
+                        Modifier.size(if (compact) 30.dp else 36.dp).clip(RoundedCornerShape(6.dp)).background(InkHigh),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (c.logo != null) {
+                            AsyncImage(c.logo, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(2.dp))
+                        } else {
+                            Text(c.name.take(1), color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(Modifier.size(10.dp))
+                    Text(
+                        c.name, color = if (selected) GoldLight else Cream,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = if (compact) 13.sp else 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Standard Cast button (finds Chromecast / Google TV devices on the Wi-Fi). */
+@Composable
+private fun CastButton(modifier: Modifier = Modifier) {
+    AndroidView(
+        factory = { c ->
+            MediaRouteButton(ContextThemeWrapper(c, androidx.appcompat.R.style.Theme_AppCompat)).also {
+                runCatching { CastButtonFactory.setUpMediaRouteButton(c.applicationContext, it) }
+            }
+        },
+        modifier = modifier,
+    )
 }
 
 @Composable
 private fun BigButton(icon: ImageVector, label: String, size: Dp, onClick: () -> Unit) {
     Box(
-        Modifier.size(size).background(Color(0x99000000), CircleShape).clickable(onClick = onClick),
+        Modifier.size(size).background(Color(0xB3000000), CircleShape)
+            .border(1.5.dp, GoldBrush, CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, label, tint = Color.White, modifier = Modifier.size(size * 0.6f))
+        Icon(icon, label, tint = GoldLight, modifier = Modifier.size(size * 0.6f))
     }
 }

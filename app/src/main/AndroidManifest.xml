@@ -27,6 +27,10 @@
             </intent-filter>
         </activity>
 
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.mashwar.tv.CastOptionsProvider" />
+
         <!-- Android Auto: browse playlists/channels and play audio from the car screen. -->
         <meta-data
             android:name="com.google.android.gms.car.application"

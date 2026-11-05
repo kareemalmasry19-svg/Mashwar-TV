@@ -11,10 +11,14 @@ import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.cast.CastPlayer
+import androidx.media3.cast.SessionAvailabilityListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import com.google.android.gms.cast.framework.CastContext
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -36,6 +40,11 @@ class PlaybackService : MediaLibraryService() {
     private var session: MediaLibrarySession? = null
     private val handler = Handler(Looper.getMainLooper())
     private var reconnects = 0
+    private lateinit var exo: ExoPlayer
+    private var cast: CastPlayer? = null
+    /** Items as they were on the phone before casting (Cast drops our HTTP headers). */
+    private var beforeCast: List<MediaItem> = emptyList()
+    @Volatile private var casting = false
     /** All ChannelLibrary work runs here (big playlists would freeze the car screen on the main thread). */
     private val bg: ListeningExecutorService = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor())
     private lateinit var library: ChannelLibrary
@@ -65,6 +74,7 @@ class PlaybackService : MediaLibraryService() {
             )
             .build()
         player.repeatMode = Player.REPEAT_MODE_ALL
+        exo = player
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) reconnects = 0
@@ -106,7 +116,58 @@ class PlaybackService : MediaLibraryService() {
         session = MediaLibrarySession.Builder(this, player, Callback())
             .setSessionActivity(open)
             .build()
+        setUpCast()
     }
+
+    private fun setUpCast() {
+        // Needs Google Play services; without them the app simply has no Cast.
+        val ctx = runCatching { CastContext.getSharedInstance(this) }.getOrNull() ?: return
+        cast = CastPlayer(ctx).also { cp ->
+            cp.repeatMode = Player.REPEAT_MODE_ALL
+            cp.setSessionAvailabilityListener(object : SessionAvailabilityListener {
+                override fun onCastSessionAvailable() = switchTo(cp)
+                override fun onCastSessionUnavailable() = switchTo(exo)
+            })
+        }
+    }
+
+    /** Moves the current queue between the phone player and the Cast device. */
+    private fun switchTo(target: Player) {
+        val s = session ?: return
+        val from = s.player
+        if (from === target) return
+        val toCast = target !== exo
+        val index = from.currentMediaItemIndex
+        val playWhenReady = from.playWhenReady
+        val items = if (toCast) {
+            (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }.also { beforeCast = it }
+        } else {
+            // Back from Cast: same queue, with each item's original headers restored.
+            (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }.map { ci ->
+                beforeCast.find { it.localConfiguration?.uri == ci.localConfiguration?.uri } ?: ci
+            }
+        }
+        from.stop()
+        from.clearMediaItems()
+        casting = toCast
+        if (items.isNotEmpty()) {
+            val list = if (toCast) items.map(::castable) else items
+            target.setMediaItems(list, index.coerceIn(0, list.lastIndex), C.TIME_UNSET)
+            target.prepare()
+            target.playWhenReady = playWhenReady
+        }
+        s.player = target
+    }
+
+    /** The Cast receiver needs an explicit format; IPTV is HLS unless it says TS. */
+    private fun castable(item: MediaItem): MediaItem {
+        if (item.localConfiguration?.mimeType != null) return item
+        val url = item.localConfiguration?.uri?.toString().orEmpty().lowercase()
+        val mime = if (".ts" in url && "m3u8" !in url) MimeTypes.VIDEO_MP2T else MimeTypes.APPLICATION_M3U8
+        return item.buildUpon().setMimeType(mime).build()
+    }
+
+    private fun forPlayer(items: List<MediaItem>) = if (casting) items.map(::castable) else items
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
@@ -118,10 +179,10 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         bg.shutdown()
-        session?.run {
-            player.release()
-            release()
-        }
+        cast?.setSessionAvailabilityListener(null)
+        cast?.release()
+        exo.release()
+        session?.release()
         session = null
         super.onDestroy()
     }
@@ -206,7 +267,7 @@ class PlaybackService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> =
-            bg.submit<MutableList<MediaItem>> { expand(mediaItems).first.toMutableList() }
+            bg.submit<MutableList<MediaItem>> { forPlayer(expand(mediaItems).first).toMutableList() }
 
         override fun onSetMediaItems(
             mediaSession: MediaSession,
@@ -218,7 +279,7 @@ class PlaybackService : MediaLibraryService() {
             return bg.submit<MediaSession.MediaItemsWithStartPosition> {
                 val (items, expandedStart) = expand(mediaItems)
                 val start = expandedStart ?: startIndex.takeIf { it in items.indices } ?: 0
-                MediaSession.MediaItemsWithStartPosition(items, start, C.TIME_UNSET)
+                MediaSession.MediaItemsWithStartPosition(forPlayer(items), start, C.TIME_UNSET)
             }
         }
 

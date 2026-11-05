@@ -93,6 +93,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         store.savePlaylists(playlists)
     }
 
+    fun rename(p: Playlist, name: String) {
+        val n = name.trim().ifEmpty { return }
+        playlists = playlists.map { if (it.id == p.id) it.copy(name = n) else it }
+        store.savePlaylists(playlists)
+        if (current?.id == p.id) current = current?.copy(name = n)
+    }
+
     fun closePlaylist() {
         current = null
         channels = emptyList()

@@ -5,7 +5,9 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -67,6 +70,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,10 +97,11 @@ fun HomeScreen(vm: MainViewModel) {
     MessageToasts(vm)
     var showAdd by remember { mutableStateOf(false) }
     var toDelete by remember { mutableStateOf<Playlist?>(null) }
+    var toRename by remember { mutableStateOf<Playlist?>(null) }
 
     Scaffold(
         topBar = {
-            CenterAlignedTopAppBar(title = { Text("Kenue TV", fontWeight = FontWeight.Bold) })
+            CenterAlignedTopAppBar(title = { BrandTitle() })
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -131,6 +137,7 @@ fun HomeScreen(vm: MainViewModel) {
                         Card(
                             Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable { vm.open(p) },
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            border = BorderStroke(1.dp, Gold.copy(alpha = 0.35f)),
                         ) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Filled.Tv, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
@@ -146,6 +153,7 @@ fun HomeScreen(vm: MainViewModel) {
                                 if (p.source != "sample") {
                                     IconButton(onClick = { vm.refresh(p) }) { Icon(Icons.Filled.Refresh, "تحديث") }
                                 }
+                                IconButton(onClick = { toRename = p }) { Icon(Icons.Filled.Edit, "تغيير الاسم") }
                                 IconButton(onClick = { toDelete = p }) { Icon(Icons.Filled.Delete, "مسح") }
                             }
                         }
@@ -156,6 +164,20 @@ fun HomeScreen(vm: MainViewModel) {
     }
 
     if (showAdd) AddPlaylistDialog(vm) { showAdd = false }
+    toRename?.let { p ->
+        var newName by remember(p.id) { mutableStateOf(p.name) }
+        AlertDialog(
+            onDismissRequest = { toRename = null },
+            title = { Text("تغيير اسم القائمة") },
+            text = {
+                OutlinedTextField(newName, { newName = it }, singleLine = true, label = { Text("الاسم") })
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.rename(p, newName); toRename = null }, enabled = newName.isNotBlank()) { Text("حفظ") }
+            },
+            dismissButton = { TextButton(onClick = { toRename = null }) { Text("إلغاء") } },
+        )
+    }
     toDelete?.let { p ->
         AlertDialog(
             onDismissRequest = { toDelete = null },
@@ -291,13 +313,14 @@ private fun ChannelRow(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF1E3350)),
+            Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(InkHigh)
+                .border(1.dp, Gold.copy(alpha = 0.3f), RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center,
         ) {
             if (c.logo != null) {
                 AsyncImage(model = c.logo, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(4.dp))
             } else {
-                Text(c.name.take(1), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(c.name.take(1), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Gold)
             }
         }
         Spacer(Modifier.size(14.dp))
@@ -312,4 +335,19 @@ private fun ChannelRow(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () 
             )
         }
     }
+}
+
+/** "KENUE TV" in brushed gold. */
+@Composable
+fun BrandTitle(compact: Boolean = false) {
+    Text(
+        "KENUE TV",
+        style = TextStyle(
+            brush = GoldBrush,
+            fontFamily = FontFamily.Serif,
+            fontWeight = FontWeight.Bold,
+            fontSize = if (compact) 18.sp else 24.sp,
+            letterSpacing = if (compact) 2.sp else 4.sp,
+        ),
+    )
 }
