@@ -105,19 +105,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val lastChannel: Channel?
         get() = store.lastChannelUrl?.let { url -> channels.firstOrNull { it.url == url } }
 
+    /** Bumped on every new pick, so the player screen reloads the queue only then. */
+    var queueVersion by mutableIntStateOf(0)
+        private set
+
     fun play(list: List<Channel>, index: Int) {
         queue = list
         playingIndex = index
+        queueVersion++
         list.getOrNull(index)?.let { store.lastChannelUrl = it.url }
     }
 
-    fun next() = step(1)
-    fun previous() = step(-1)
-
-    private fun step(d: Int) {
-        if (queue.isEmpty()) return
-        playingIndex = (playingIndex + d + queue.size) % queue.size
-        store.lastChannelUrl = queue[playingIndex].url
+    /** Called when the player itself moves (next/previous, steering wheel, car screen). */
+    fun syncIndex(i: Int) {
+        if (i !in queue.indices || i == playingIndex) return
+        playingIndex = i
+        store.lastChannelUrl = queue[i].url
     }
 
     fun closePlayer() {

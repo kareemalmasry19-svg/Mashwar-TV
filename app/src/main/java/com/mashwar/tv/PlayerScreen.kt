@@ -4,6 +4,7 @@ package com.mashwar.tv
 
 import android.app.Activity
 import android.content.Context
+import android.content.ComponentName
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
@@ -66,18 +67,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.media3.common.AudioAttributes
+import androidx.core.content.ContextCompat
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
@@ -91,22 +87,23 @@ private fun Context.findActivity(): Activity? {
     return null
 }
 
-@OptIn(UnstableApi::class)
-private fun buildSource(ctx: Context, c: Channel): MediaSource {
-    val http = DefaultHttpDataSource.Factory()
-        .setUserAgent(c.userAgent ?: DEFAULT_UA)
-        .setAllowCrossProtocolRedirects(true)
-        .setConnectTimeoutMs(15_000)
-        .setReadTimeoutMs(20_000)
-    c.referrer?.let { http.setDefaultRequestProperties(mapOf("Referer" to it)) }
-    val item = MediaItem.Builder().setUri(c.url).apply {
-        val u = c.url.lowercase()
-        when {
-            "m3u8" in u -> setMimeType(MimeTypes.APPLICATION_M3U8)
-            ".mpd" in u -> setMimeType(MimeTypes.APPLICATION_MPD)
+/** Connects to [PlaybackService]; the same player Android Auto and the notification use. */
+@Composable
+private fun rememberMediaController(): MediaController? {
+    val ctx = LocalContext.current
+    var controller by remember { mutableStateOf<MediaController?>(null) }
+    DisposableEffect(Unit) {
+        val token = SessionToken(ctx, ComponentName(ctx, PlaybackService::class.java))
+        val future = MediaController.Builder(ctx, token).buildAsync()
+        future.addListener({ controller = runCatching { future.get() }.getOrNull() }, ContextCompat.getMainExecutor(ctx))
+        onDispose {
+            controller?.stop()
+            controller?.clearMediaItems()
+            MediaController.releaseFuture(future)
+            controller = null
         }
-    }.build()
-    return DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx, http)).createMediaSource(item)
+    }
+    return controller
 }
 
 private val RESIZE_MODES = listOf(
@@ -122,15 +119,7 @@ fun PlayerScreen(vm: MainViewModel) {
     val ctx = LocalContext.current
     BackHandler { vm.closePlayer() }
 
-    val player = remember {
-        ExoPlayer.Builder(ctx).build().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
-                /* handleAudioFocus = */ true,
-            )
-            playWhenReady = true
-        }
-    }
+    val player = rememberMediaController()
     var isPlaying by remember { mutableStateOf(false) }
     var buffering by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -151,39 +140,52 @@ fun PlayerScreen(vm: MainViewModel) {
         onDispose {
             controller?.show(WindowInsetsCompat.Type.systemBars())
             if (activity != null && oldOrientation != null) activity.requestedOrientation = oldOrientation
-            player.release()
         }
     }
 
     DisposableEffect(player) {
+        val p = player ?: return@DisposableEffect onDispose { }
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY) error = null
             }
+            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                error = null
+                vm.syncIndex(p.currentMediaItemIndex)
+            }
             override fun onPlayerError(e: PlaybackException) {
-                if (e.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
-                    player.seekToDefaultPosition()
-                    player.prepare()
-                } else {
+                // BEHIND_LIVE_WINDOW is recovered by the service itself.
+                if (e.errorCode != PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     error = "القناة مش شغالة دلوقتي\n(${e.errorCodeName})"
                     showControls = true
                 }
             }
         }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
+        p.addListener(listener)
+        onDispose { p.removeListener(listener) }
     }
 
-    LaunchedEffect(channel.url, retryKey) {
+    // New pick from the phone list → hand the whole list to the service as a queue.
+    LaunchedEffect(player, vm.queueVersion) {
+        val p = player ?: return@LaunchedEffect
         error = null
         buffering = true
-        player.setMediaSource(buildSource(ctx, channel))
-        player.prepare()
-        player.play()
+        p.setMediaItems(vm.queue.map { it.toMediaItem() }, vm.playingIndex.coerceAtLeast(0), C.TIME_UNSET)
+        p.prepare()
+        p.play()
         showControls = true
         interaction++
+    }
+
+    LaunchedEffect(retryKey) {
+        if (retryKey == 0) return@LaunchedEffect
+        val p = player ?: return@LaunchedEffect
+        error = null
+        buffering = true
+        p.prepare()
+        p.play()
     }
 
     // Auto-hide controls after 4 seconds of no interaction.
@@ -200,10 +202,12 @@ fun PlayerScreen(vm: MainViewModel) {
                 PlayerView(it).apply {
                     useController = false
                     keepScreenOn = true
-                    this.player = player
                 }
             },
-            update = { it.resizeMode = RESIZE_MODES[resizeIdx].first },
+            update = {
+                it.player = player
+                it.resizeMode = RESIZE_MODES[resizeIdx].first
+            },
             modifier = Modifier.fillMaxSize(),
         )
         Box(
@@ -261,12 +265,12 @@ fun PlayerScreen(vm: MainViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(48.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        BigButton(Icons.Filled.SkipPrevious, "السابقة", 72.dp) { vm.previous() }
+                        BigButton(Icons.Filled.SkipPrevious, "السابقة", 72.dp) { player?.seekToPreviousMediaItem(); interaction++ }
                         BigButton(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, "تشغيل", 96.dp) {
-                            if (player.isPlaying) player.pause() else player.play()
+                            player?.let { if (it.isPlaying) it.pause() else it.play() }
                             interaction++
                         }
-                        BigButton(Icons.Filled.SkipNext, "التالية", 72.dp) { vm.next() }
+                        BigButton(Icons.Filled.SkipNext, "التالية", 72.dp) { player?.seekToNextMediaItem(); interaction++ }
                     }
                 }
             }
