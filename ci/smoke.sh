@@ -75,6 +75,14 @@ sleep 6
 screen after-cast
 adb shell input keyevent KEYCODE_BACK
 sleep 2
+adb shell input tap 20 $(( ${W%x*} / 3 ))
+sleep 1
+screen before-tv
+tap "اعرض على شاشة سامسونج / LG" nodump
+sleep 8
+screen tv-picker
+adb shell input keyevent KEYCODE_BACK
+sleep 2
 adb shell input keyevent KEYCODE_BACK
 sleep 2
 adb shell input keyevent KEYCODE_HOME
