@@ -100,7 +100,7 @@ object CrashLog {
         override fun uncaughtException(t: Thread, e: Throwable) {
             runCatching {
                 val version = app.packageManager.getPackageInfo(app.packageName, 0).versionName
-                file(app).writeText("Kenue TV $version\nThread: ${t.name}\n\n${e.stackTraceToString()}")
+                file(app).writeText("Almasry TV $version\nThread: ${t.name}\n\n${e.stackTraceToString()}")
             }
             next?.uncaughtException(t, e)
         }
@@ -142,7 +142,7 @@ private fun CrashReportDialog() {
         confirmButton = {
             TextButton(onClick = {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("Kenue TV crash", text))
+                cm.setPrimaryClip(ClipData.newPlainText("Almasry TV crash", text))
                 Toast.makeText(ctx, "اتنسخ، ابعته في الشات", Toast.LENGTH_SHORT).show()
                 report = null
             }) { Text("انسخ التفاصيل") }

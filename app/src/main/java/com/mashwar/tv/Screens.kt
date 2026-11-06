@@ -1,5 +1,13 @@
 package com.mashwar.tv
 
+import androidx.compose.ui.text.font.Font
+
+import androidx.compose.ui.text.withStyle
+
+import androidx.compose.ui.text.buildAnnotatedString
+
+import androidx.compose.ui.text.SpanStyle
+
 import androidx.compose.runtime.CompositionLocalProvider
 
 import androidx.compose.ui.unit.LayoutDirection
@@ -504,17 +512,19 @@ private fun ChannelRow(
     }
 }
 
-/** "KENUE TV" in brushed gold. */
+private val RuqaaFont = FontFamily(Font(R.font.aref_ruqaa_bold, FontWeight.Bold))
+private val CinzelFont = FontFamily(Font(R.font.cinzel_bold, FontWeight.Bold))
+
+/** "المصري TV" in shimmering gold: Aref Ruqaa calligraphy + Cinzel caps (both OFL), like the app icon. */
 @Composable
 fun BrandTitle(compact: Boolean = false) {
+    val size = if (compact) 22.sp else 30.sp
     Text(
-        "KENUE TV",
-        style = TextStyle(
-            brush = shimmeringGold(),
-            fontFamily = FontFamily.Serif,
-            fontWeight = FontWeight.Bold,
-            fontSize = if (compact) 18.sp else 24.sp,
-            letterSpacing = if (compact) 2.sp else 4.sp,
-        ),
+        buildAnnotatedString {
+            withStyle(SpanStyle(fontFamily = RuqaaFont, fontSize = size)) { append("المصري") }
+            append(" ")
+            withStyle(SpanStyle(fontFamily = CinzelFont, fontSize = size * 0.72f, letterSpacing = 2.sp)) { append("TV") }
+        },
+        style = TextStyle(brush = shimmeringGold(), fontWeight = FontWeight.Bold),
     )
 }
