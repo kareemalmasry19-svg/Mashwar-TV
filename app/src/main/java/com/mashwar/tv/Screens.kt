@@ -1,5 +1,31 @@
 package com.mashwar.tv
 
+import androidx.compose.runtime.CompositionLocalProvider
+
+import androidx.compose.ui.unit.LayoutDirection
+
+import androidx.compose.ui.platform.LocalLayoutDirection
+
+import androidx.compose.material3.CircularProgressIndicator
+
+import androidx.compose.foundation.verticalScroll
+
+import androidx.compose.foundation.rememberScrollState
+
+import androidx.compose.runtime.mutableIntStateOf
+
+import androidx.compose.material.icons.filled.VisibilityOff
+
+import androidx.compose.material.icons.filled.Visibility
+
+import androidx.compose.ui.text.input.VisualTransformation
+
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+
+import androidx.compose.ui.text.input.KeyboardType
+
+import androidx.compose.foundation.text.KeyboardOptions
+
 import androidx.compose.ui.draw.alpha
 
 import androidx.compose.material.icons.filled.NetworkCheck
@@ -151,7 +177,8 @@ fun HomeScreen(vm: MainViewModel) {
                                 Column(Modifier.weight(1f)) {
                                     Text(p.name, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                                     Text(
-                                        if (p.isUri) "ملف من الموبايل" else if (p.source == "sample") "روابط تجريبية" else p.source,
+                                        XtreamAccount.decode(p.source)?.let { "Xtream • ${it.user} @ ${it.host}" }
+                                            ?: if (p.isUri) "ملف من الموبايل" else if (p.source == "sample") "روابط تجريبية" else p.source,
                                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -210,8 +237,16 @@ fun HomeScreen(vm: MainViewModel) {
 @Composable
 private fun AddPlaylistDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
+    var tab by remember { mutableIntStateOf(0) } // 0 = M3U, 1 = Xtream
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
+    var server by remember { mutableStateOf("") }
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
+    var showPass by remember { mutableStateOf(false) }
+    var hls by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -222,25 +257,82 @@ private fun AddPlaylistDialog(vm: MainViewModel, onDismiss: () -> Unit) {
         }
     }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("قائمة جديدة") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = tab == 0, onClick = { tab = 0; err = null }, label = { Text("رابط / ملف M3U") })
+                    FilterChip(selected = tab == 1, onClick = { tab = 1; err = null }, label = { Text("دخول Xtream") })
+                }
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(name, { name = it }, label = { Text("الاسم (اختياري)") }, singleLine = true)
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(url, { url = it }, label = { Text("رابط M3U") }, singleLine = true)
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }, Modifier.fillMaxWidth()) {
-                    Text("أو افتح ملف من الموبايل")
+                if (tab == 0) {
+                    OutlinedTextField(url, { url = it }, label = { Text("رابط M3U") }, singleLine = true)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }, Modifier.fillMaxWidth()) {
+                        Text("أو افتح ملف من الموبايل")
+                    }
+                } else {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Column {
+                            OutlinedTextField(
+                                server, { server = it }, singleLine = true,
+                                label = { Text("Server  (http://host:port)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(user, { user = it }, singleLine = true, label = { Text("Username") })
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                pass, { pass = it }, singleLine = true, label = { Text("Password") },
+                                visualTransformation = if (showPass) VisualTransformation.None else PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                trailingIcon = {
+                                    IconButton(onClick = { showPass = !showPass }) {
+                                        Icon(if (showPass) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("صيغة البث:", fontSize = 14.sp)
+                        Spacer(Modifier.size(8.dp))
+                        FilterChip(selected = !hls, onClick = { hls = false }, label = { Text("TS (أضمن)") })
+                        Spacer(Modifier.size(6.dp))
+                        FilterChip(selected = hls, onClick = { hls = true }, label = { Text("HLS") })
+                    }
+                    Text("لو عندك رابط get.php كامل، حطه في خانة السيرفر وسيب الباقي فاضي.", fontSize = 12.sp, color = Muted)
+                }
+                err?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
                 }
             }
         },
         confirmButton = {
-            Button(enabled = url.isNotBlank(), onClick = { vm.addPlaylist(name, url, false); onDismiss() }) {
-                Text("ضيف")
+            if (tab == 0) {
+                Button(enabled = url.isNotBlank(), onClick = { vm.addPlaylist(name, url, false); onDismiss() }) { Text("ضيف") }
+            } else {
+                Button(
+                    enabled = server.isNotBlank() && !busy,
+                    onClick = {
+                        busy = true; err = null
+                        vm.addXtream(name, server, user, pass, hls) { e ->
+                            busy = false
+                            if (e == null) onDismiss() else err = e
+                        }
+                    },
+                ) {
+                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.Black)
+                    else Text("دخول")
+                }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("إلغاء") } },
     )
 }
 

@@ -40,6 +40,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val nowPlaying: Channel? get() = queue.getOrNull(playingIndex)
 
+    /** Signs in to an Xtream panel, then saves its live channels as a playlist that refreshes from the panel. */
+    fun addXtream(name: String, server: String, user: String, pass: String, hls: Boolean, onDone: (String?) -> Unit) =
+        viewModelScope.launch {
+            loading = true
+            try {
+                val acc = Xtream.parseInput(server, user, pass, hls)
+                val info = Xtream.login(acc)
+                val text = Xtream.buildM3u(acc)
+                savePlaylist(name.ifBlank { acc.host }, acc.encode(), false, text)
+                message = "اتسجّل الدخول ✓ • " + Xtream.expiryText(info) +
+                    (info.maxConnections?.let { " • أقصى عدد أجهزة: $it" } ?: "")
+                onDone(null)
+            } catch (e: Exception) {
+                onDone(e.message ?: e.javaClass.simpleName)
+            } finally {
+                loading = false
+            }
+        }
+
     fun addPlaylist(name: String, source: String, isUri: Boolean) = viewModelScope.launch {
         loading = true
         try {

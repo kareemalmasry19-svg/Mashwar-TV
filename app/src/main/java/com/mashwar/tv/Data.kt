@@ -156,6 +156,7 @@ class Store(context: Context) {
 /** Downloads playlist text from a URL (following http<->https redirects) or reads a picked file. */
 suspend fun fetchPlaylistText(context: Context, source: String, isUri: Boolean): String =
     withContext(Dispatchers.IO) {
+        XtreamAccount.decode(source)?.let { return@withContext Xtream.buildM3u(it) }
         if (isUri) {
             context.contentResolver.openInputStream(Uri.parse(source))
                 ?.bufferedReader()?.use { it.readText() }
