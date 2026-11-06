@@ -116,7 +116,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadEpg(p: Playlist, force: Boolean = false) {
         epgJob?.cancel()
         epg = null
+        shortEpg.clear()
         if (p.epgUrl == null) return
+        // Xtream panels: their xmltv.php is often tens of MB and downloading it while watching slowed
+        // the stream down. Use the light per-channel guide instead (see requestEpg).
+        if (XtreamAccount.decode(p.source) != null && "xmltv.php" in p.epgUrl) return
         val list = channels
         epgJob = viewModelScope.launch {
             epgLoading = true
@@ -127,6 +131,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             epgLoading = false
         }
+    }
+
+    /** Xtream per-channel guide: url → programmes, filled on demand for channels on screen. */
+    private val shortEpg = androidx.compose.runtime.mutableStateMapOf<String, List<Programme>>()
+    private val shortEpgAsked = HashMap<String, Long>()
+    private val shortEpgGate = Semaphore(3)
+
+    fun requestEpg(c: Channel) {
+        val acc = current?.source?.let { XtreamAccount.decode(it) } ?: return
+        val id = xtreamStreamId(c.url) ?: return
+        val t = System.currentTimeMillis()
+        val asked = shortEpgAsked[c.url]
+        val have = shortEpg[c.url]
+        // re-ask when the cached "now" programme has ended, or every 30 min
+        if (asked != null && t - asked < 30 * 60_000 && (have == null || have.any { it.stop > t })) return
+        shortEpgAsked[c.url] = t
+        viewModelScope.launch {
+            val list = shortEpgGate.withPermit { runCatching { Xtream.shortEpg(acc, id) }.getOrDefault(emptyList()) }
+            shortEpg[c.url] = list
+        }
+    }
+
+    /** Now / next for a channel, from the XMLTV guide or the Xtream per-channel guide. */
+    fun nowNext(c: Channel, time: Long): Pair<Programme?, Programme?> {
+        epg?.let { e -> e.nowNext(c, time).let { if (it.first != null || it.second != null) return it } }
+        val list = shortEpg[c.url] ?: return null to null
+        val i = list.indexOfFirst { time in it.start until it.stop }
+        if (i < 0) return null to list.firstOrNull { it.start > time }
+        return list[i] to list.getOrNull(i + 1)
     }
 
     fun setEpgUrl(p: Playlist, url: String) {

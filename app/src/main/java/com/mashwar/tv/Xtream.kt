@@ -110,3 +110,25 @@ object Xtream {
     fun expiryText(info: XtreamInfo): String =
         info.expires?.let { "الاشتراك ساري لحد " + SimpleDateFormat("d/M/yyyy", Locale.US).format(Date(it)) } ?: "اشتراك مفتوح"
 }
+
+/** stream_id of an Xtream live URL: ".../live/user/pass/1234.ts" → "1234". */
+fun xtreamStreamId(url: String): String? =
+    url.substringAfterLast('/').substringBefore('.').takeIf { id -> id.isNotEmpty() && id.all { it.isDigit() } }
+
+/** Current + next programmes for one channel (a few hundred bytes, instead of the panel's whole XMLTV file). */
+suspend fun Xtream.shortEpg(acc: XtreamAccount, streamId: String): List<Programme> = withContext(Dispatchers.IO) {
+    val q = "username=${URLEncoder.encode(acc.user, "UTF-8")}&password=${URLEncoder.encode(acc.pass, "UTF-8")}"
+    val req = Request.Builder()
+        .url("${acc.server}/player_api.php?$q&action=get_short_epg&stream_id=$streamId&limit=4")
+        .header("User-Agent", DEFAULT_UA).build()
+    val body = sharedHttp.newCall(req).execute().use { r -> if (r.isSuccessful) r.body?.string() else null } ?: return@withContext emptyList()
+    val arr = runCatching { JSONObject(body).optJSONArray("epg_listings") }.getOrNull() ?: return@withContext emptyList()
+    fun b64(s: String) = runCatching { String(android.util.Base64.decode(s, android.util.Base64.DEFAULT)) }.getOrDefault(s)
+    (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        val start = o.optString("start_timestamp").toLongOrNull()?.times(1000) ?: return@mapNotNull null
+        val stop = o.optString("stop_timestamp").toLongOrNull()?.times(1000) ?: return@mapNotNull null
+        val title = b64(o.optString("title")).trim()
+        if (title.isEmpty()) null else Programme(start, stop, title)
+    }.sortedBy { it.start }
+}

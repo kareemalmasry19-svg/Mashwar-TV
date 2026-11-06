@@ -456,9 +456,10 @@ fun ChannelsScreen(vm: MainViewModel) {
             }
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 itemsIndexed(filtered, key = { i, c -> "$i-${c.url}" }, contentType = { _, _ -> "channel" }) { i, c ->
+                    LaunchedEffect(c.url) { vm.requestEpg(c) }
                     ChannelRow(
                         c, c.url in vm.favorites, dead = c.url in vm.dead,
-                        now = vm.epg?.nowNext(c, now)?.first, time = now,
+                        now = vm.nowNext(c, now).first, time = now,
                         onFav = { vm.toggleFavorite(c) },
                     ) { vm.play(filtered, i) }
                 }

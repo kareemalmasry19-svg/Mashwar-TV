@@ -22,6 +22,8 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
@@ -112,6 +114,14 @@ fun folderItem(id: String, title: String): MediaItem =
         )
         .build()
 
+/**
+ * MPEG-TS (most Xtream / IPTV live links): many IPTV encoders send few IDR frames, and the default
+ * extractor waits for one before showing anything. Accepting other key frames starts channels sooner.
+ */
+private val tsFastStart = DefaultExtractorsFactory()
+    .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES)
+    .setTsExtractorTimestampSearchBytes(600 * 188)
+
 /** One HTTP client for all streams: keeps connections open between HLS segments. */
 /**
  * IPv4 first: on many mobile networks IPv6 is advertised but broken, and OkHttp waits for the
@@ -157,7 +167,7 @@ class ChannelSourceFactory(private val context: Context) : MediaSource.Factory {
         val extras = mediaItem.requestMetadata.extras
         val http = OkHttpDataSource.Factory(sharedHttp).setUserAgent(extras?.getString(EXTRA_UA) ?: DEFAULT_UA)
         extras?.getString(EXTRA_REF)?.let { http.setDefaultRequestProperties(mapOf("Referer" to it)) }
-        val factory = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http))
+        val factory = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http), tsFastStart)
         drm?.let { factory.setDrmSessionManagerProvider(it) }
         factory.setLoadErrorHandlingPolicy(errorPolicy)
         return factory.createMediaSource(mediaItem)

@@ -507,7 +507,8 @@ fun PlayerScreen(vm: MainViewModel) {
                     Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                         Text(channel.name, color = GoldLight, fontSize = if (compact) 16.sp else 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${vm.playingIndex + 1} / ${vm.queue.size} • ${channel.group}", color = Muted, fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val (cur, next) = vm.epg?.nowNext(channel, now) ?: (null to null)
+                        LaunchedEffect(channel.url) { vm.requestEpg(channel) }
+                        val (cur, next) = vm.nowNext(channel, now)
                         if (cur != null || next != null) {
                             Text(
                                 buildString {
@@ -727,7 +728,8 @@ private fun ChannelPanel(vm: MainViewModel, compact: Boolean, now: Long, onPick:
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                             fontSize = if (compact) 13.sp else 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
-                        vm.epg?.nowNext(c, now)?.first?.let { pr ->
+                        LaunchedEffect(c.url) { vm.requestEpg(c) }
+                        vm.nowNext(c, now).first?.let { pr ->
                             Text(pr.title, color = Muted, fontSize = if (compact) 10.sp else 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
