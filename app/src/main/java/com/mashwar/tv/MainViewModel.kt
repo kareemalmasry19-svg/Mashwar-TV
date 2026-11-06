@@ -189,7 +189,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val bad = ConcurrentHashMap.newKeySet<String>()
             val done = AtomicInteger()
             scanProgress = 0 to list.size
-            val gate = Semaphore(12)
+            // Xtream subscriptions usually allow only 1–2 streams at once: probing many in parallel gets
+            // refused (working channels marked dead) and can flag the account. One at a time there.
+            val gate = Semaphore(if (XtreamAccount.decode(p.source) != null) 1 else 12)
             coroutineScope {
                 list.forEach { c ->
                     launch {
