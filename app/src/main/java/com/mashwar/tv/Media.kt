@@ -15,6 +15,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import okhttp3.ConnectionPool
+import okhttp3.Dns
+import java.net.Inet4Address
+import java.net.InetAddress
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
@@ -110,9 +113,19 @@ fun folderItem(id: String, title: String): MediaItem =
         .build()
 
 /** One HTTP client for all streams: keeps connections open between HLS segments. */
-private val sharedHttp: OkHttpClient by lazy {
+/**
+ * IPv4 first: on many mobile networks IPv6 is advertised but broken, and OkHttp waits for the
+ * IPv6 attempt to time out before trying IPv4 — that was seconds of delay on every connection.
+ */
+private object Ipv4FirstDns : Dns {
+    override fun lookup(hostname: String): List<InetAddress> =
+        Dns.SYSTEM.lookup(hostname).sortedBy { if (it is Inet4Address) 0 else 1 }
+}
+
+val sharedHttp: OkHttpClient by lazy {
     OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+        .dns(Ipv4FirstDns)
+        .connectTimeout(7, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
         .retryOnConnectionFailure(true)

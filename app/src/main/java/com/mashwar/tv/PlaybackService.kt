@@ -18,6 +18,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.cast.CastPlayer
 import androidx.media3.cast.SessionAvailabilityListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import com.google.android.gms.cast.framework.CastContext
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.LibraryResult
@@ -61,6 +65,7 @@ class PlaybackService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             // Moderate buffer: enough to ride out short drops without hogging memory; quick channel start.
+            .setBandwidthMeter(bandwidthMeter())
             .setLoadControl(
                 DefaultLoadControl.Builder()
                     .setBufferDurationsMs(
@@ -74,6 +79,7 @@ class PlaybackService : MediaLibraryService() {
             .build()
         player.repeatMode = Player.REPEAT_MODE_ALL
         exo = player
+        watchNetwork()
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) reconnects = 0
@@ -175,7 +181,55 @@ class PlaybackService : MediaLibraryService() {
         if (p == null || !p.playWhenReady || p.mediaItemCount == 0) stopSelf()
     }
 
+    // ---------- Network-aware quality (Wi-Fi / 4G / 5G / weak signal / Data Saver)
+
+    /** Sensible first guess per network type, so a channel starts at the right quality instead of probing. */
+    private fun bandwidthMeter() = DefaultBandwidthMeter.Builder(this)
+        .setInitialBitrateEstimate(C.NETWORK_TYPE_WIFI, 8_000_000L)
+        .setInitialBitrateEstimate(C.NETWORK_TYPE_ETHERNET, 10_000_000L)
+        .setInitialBitrateEstimate(C.NETWORK_TYPE_5G_SA, 20_000_000L)
+        .setInitialBitrateEstimate(C.NETWORK_TYPE_5G_NSA, 12_000_000L)
+        .setInitialBitrateEstimate(C.NETWORK_TYPE_4G, 4_000_000L)
+        .setInitialBitrateEstimate(C.NETWORK_TYPE_3G, 1_000_000L)
+        .setInitialBitrateEstimate(C.NETWORK_TYPE_2G, 300_000L)
+        .setResetOnNetworkTypeChange(true)
+        .build()
+
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+
+    private fun watchNetwork() {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                handler.post { applyNetworkCap(cm, caps) }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb); netCallback = cb }
+    }
+
+    /** Caps video bitrate only when the connection can't take more (weak mobile signal, Data Saver). */
+    private fun applyNetworkCap(cm: ConnectivityManager, caps: NetworkCapabilities) {
+        val saver = cm.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+        val mobile = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        val kbps = caps.linkDownstreamBandwidthKbps
+        val cap = when {
+            saver -> 1_500_000             // Data Saver on: ~480p
+            !mobile -> Int.MAX_VALUE       // Wi-Fi / Ethernet: let adaptive streaming decide
+            kbps >= 40_000 -> Int.MAX_VALUE // strong 4G / 5G
+            kbps >= 8_000 -> 4_000_000      // normal 4G: up to ~720p/1080p
+            kbps >= 2_000 -> 1_800_000      // weak 4G / 3G: ~480p
+            else -> 800_000                 // very weak: ~360p
+        }
+        val p = exo
+        if (p.trackSelectionParameters.maxVideoBitrate != cap) {
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setMaxVideoBitrate(cap).build()
+        }
+    }
+
     override fun onDestroy() {
+        netCallback?.let { cb ->
+            runCatching { (getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(cb) }
+        }
         handler.removeCallbacksAndMessages(null)
         bg.shutdown()
         cast?.setSessionAvailabilityListener(null)

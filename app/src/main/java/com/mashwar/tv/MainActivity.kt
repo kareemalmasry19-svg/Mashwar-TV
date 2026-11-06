@@ -48,6 +48,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         Coil.setImageLoader(
             ImageLoader.Builder(this)
+                .okHttpClient(sharedHttp) // same fast connections as the streams
                 .respectCacheHeaders(false) // IPTV logo hosts often send no-cache
                 .crossfade(false)
                 .memoryCache { MemoryCache.Builder(this).maxSizePercent(0.20).build() }
