@@ -38,6 +38,13 @@ adb shell wm size
 adb shell am start -W -n com.mashwar.tv/.MainActivity
 sleep 6
 screen home
+tap "قائمة جديدة"
+sleep 2
+tap "دخول Xtream"
+sleep 2
+screen xtream-dialog
+tap "إلغاء" nodump
+sleep 2
 tap "جرّب بقائمة تجريبية"
 sleep 6
 screen channels
