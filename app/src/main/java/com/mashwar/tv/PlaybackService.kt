@@ -18,6 +18,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.cast.CastPlayer
 import androidx.media3.cast.SessionAvailabilityListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import android.net.ConnectivityManager
 import android.net.Network
@@ -56,7 +57,10 @@ class PlaybackService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         library = ChannelLibrary(this)
-        val player = ExoPlayer.Builder(this)
+        // If the phone's hardware decoder refuses a stream (common with some movie files), try the next one
+        // instead of stalling or failing.
+        val renderers = DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+        val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(ChannelSourceFactory(this))
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
@@ -69,8 +73,8 @@ class PlaybackService : MediaLibraryService() {
             .setLoadControl(
                 DefaultLoadControl.Builder()
                     .setBufferDurationsMs(
-                        /* minBufferMs = */ 20_000,
-                        /* maxBufferMs = */ 50_000,
+                        /* minBufferMs = */ 30_000,
+                        /* maxBufferMs = */ 60_000,
                         /* bufferForPlaybackMs = */ 1_500,
                         /* bufferForPlaybackAfterRebufferMs = */ 4_000,
                     )

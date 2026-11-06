@@ -95,20 +95,18 @@ fun VodGrid(vm: MainViewModel, movies: Boolean) {
     LaunchedEffect(movies) { if (movies) vm.loadMovies() else vm.loadSeries() }
     var query by remember(movies) { mutableStateOf("") }
     var cat by remember(movies) { mutableStateOf(ALL_CATS) }
-    val all: List<Triple<String, String?, String>> = remember(vm.movies, vm.seriesList, movies) {
-        // (name, image, category) for both kinds
-        if (movies) vm.movies.orEmpty().map { Triple(it.name, it.poster, it.category) }
-        else vm.seriesList.orEmpty().map { Triple(it.name, it.cover, it.category) }
+    // One entry per poster, with its own click action, so the grid never indexes into a list that changed.
+    class Entry(val key: String, val name: String, val image: String?, val category: String, val rating: String?, val open: () -> Unit)
+    val all: List<Entry> = remember(vm.movies, vm.seriesList, movies) {
+        if (movies) vm.movies.orEmpty().map { m -> Entry("m${m.id}", m.name, m.poster, m.category, m.rating) { vm.playMovie(m) } }
+        else vm.seriesList.orEmpty().map { s -> Entry("s${s.id}", s.name, s.cover, s.category, s.rating) { vm.openSeries(s) } }
     }
-    val cats = remember(all) { listOf(ALL_CATS) + all.map { it.third }.distinct() }
-    val shown by produceState(emptyList<Int>(), all, query, cat) {
+    val cats = remember(all) { listOf(ALL_CATS) + all.map { it.category }.distinct() }
+    val shown by produceState(emptyList<Entry>(), all, query, cat) {
         if (query.isNotBlank()) delay(150)
         val q = query.trim()
         value = withContext(Dispatchers.Default) {
-            all.indices.filter { i ->
-                val (n, _, c) = all[i]
-                (cat == ALL_CATS || c == cat) && (q.isEmpty() || n.contains(q, ignoreCase = true))
-            }
+            all.filter { e -> (cat == ALL_CATS || e.category == cat) && (q.isEmpty() || e.name.contains(q, ignoreCase = true)) }
         }
     }
 
@@ -149,13 +147,8 @@ fun VodGrid(vm: MainViewModel, movies: Boolean) {
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(shown, key = { it }) { i ->
-                        val (name, img, _) = all[i]
-                        val rating = if (movies) vm.movies?.getOrNull(i)?.rating else vm.seriesList?.getOrNull(i)?.rating
-                        PosterCard(name, img, rating) {
-                            if (movies) vm.movies?.getOrNull(i)?.let(vm::playMovie)
-                            else vm.seriesList?.getOrNull(i)?.let(vm::openSeries)
-                        }
+                    items(shown, key = { it.key }) { e ->
+                        PosterCard(e.name, e.image, e.rating, e.open)
                     }
                 }
             }

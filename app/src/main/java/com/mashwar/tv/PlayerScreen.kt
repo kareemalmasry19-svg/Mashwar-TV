@@ -383,7 +383,7 @@ fun PlayerScreen(vm: MainViewModel) {
             if (++tick % 10 == 0) vm.nowPlaying?.let { ch ->
                 if (duration > 0) vm.savePosition(ch.url, if (position > duration - 60_000) 0L else position)
             }
-            delay(500)
+            delay(1_000)
         }
     }
     DisposableEffect(player) {
