@@ -114,6 +114,7 @@ fun App(vm: MainViewModel = viewModel()) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 when {
                     vm.nowPlaying != null -> PlayerScreen(vm)
+                    vm.seriesDetail != null -> SeriesScreen(vm, vm.seriesDetail!!)
                     vm.current != null -> ChannelsScreen(vm)
                     else -> HomeScreen(vm)
                 }

@@ -416,7 +416,12 @@ fun ChannelsScreen(vm: MainViewModel) {
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (vm.loading || vm.vodLoading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Gold)
+            SectionChips(vm)
+            if (vm.section != MainViewModel.Section.LIVE) {
+                VodGrid(vm, movies = vm.section == MainViewModel.Section.MOVIES)
+                return@Column
+            }
             OutlinedTextField(
                 value = query, onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),

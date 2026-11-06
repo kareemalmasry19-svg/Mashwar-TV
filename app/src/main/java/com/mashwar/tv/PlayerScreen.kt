@@ -2,6 +2,32 @@
 
 package com.mashwar.tv
 
+import androidx.compose.foundation.verticalScroll
+
+import androidx.compose.foundation.rememberScrollState
+
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+
+import androidx.compose.material.icons.filled.RadioButtonChecked
+
+import androidx.compose.material.icons.filled.ClosedCaption
+
+import androidx.media3.ui.CaptionStyleCompat
+
+import androidx.media3.common.TrackSelectionOverride
+
+import androidx.media3.common.Tracks
+
+import androidx.compose.runtime.mutableLongStateOf
+
+import androidx.compose.material3.SliderDefaults
+
+import androidx.compose.material3.Slider
+
+import androidx.compose.material.icons.filled.Forward10
+
+import androidx.compose.material.icons.filled.Replay10
+
 import java.util.Date
 
 import java.text.SimpleDateFormat
@@ -237,6 +263,8 @@ fun PlayerScreen(vm: MainViewModel) {
     var retryKey by remember { mutableIntStateOf(0) }
     var errorTick by remember { mutableIntStateOf(0) }
     var showList by remember { mutableStateOf(false) }
+    var tracks by remember { mutableStateOf(Tracks.EMPTY) }
+    var showTracks by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
     var typed by remember { mutableStateOf("") }
     var zapNote by remember { mutableStateOf<String?>(null) }
@@ -305,6 +333,7 @@ fun PlayerScreen(vm: MainViewModel) {
                 error = null
                 vm.syncIndex(vm.windowStart + p.currentMediaItemIndex)
             }
+            override fun onTracksChanged(t: Tracks) { tracks = t }
             override fun onPlayerError(e: PlaybackException) {
                 // The service retries some errors itself (live edge, other stream formats);
                 // only show the message if the player is still failing a moment later.
@@ -321,7 +350,10 @@ fun PlayerScreen(vm: MainViewModel) {
         error = null
         buffering = true
         val (window, startIdx) = vm.playerWindow()
-        p.setMediaItems(window.map { it.toMediaItem() }, startIdx, C.TIME_UNSET)
+        // Movies / episodes: don't loop, and pick up where the user stopped.
+        p.repeatMode = if (vm.playingVod) Player.REPEAT_MODE_OFF else Player.REPEAT_MODE_ALL
+        val resume = if (vm.playingVod) vm.nowPlaying?.let { vm.resumePosition(it.url) } ?: 0L else 0L
+        p.setMediaItems(window.map { it.toMediaItem() }, startIdx, if (resume > 30_000) resume else C.TIME_UNSET)
         p.prepare()
         p.play()
         showControls = true
@@ -335,6 +367,32 @@ fun PlayerScreen(vm: MainViewModel) {
         val b = p.trackSelectionParameters.buildUpon()
         if (q == 0) b.clearVideoSizeConstraints() else b.setMaxVideoSize(Int.MAX_VALUE, q)
         p.trackSelectionParameters = b.build()
+    }
+
+    // Movie / episode progress: drives the seek bar and remembers the position for "resume".
+    var position by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var seeking by remember { mutableStateOf<Float?>(null) }
+    LaunchedEffect(player, vm.playingVod) {
+        val p = player ?: return@LaunchedEffect
+        if (!vm.playingVod) return@LaunchedEffect
+        var tick = 0
+        while (true) {
+            position = p.currentPosition
+            duration = p.duration.takeIf { it > 0 } ?: 0L
+            if (++tick % 10 == 0) vm.nowPlaying?.let { ch ->
+                if (duration > 0) vm.savePosition(ch.url, if (position > duration - 60_000) 0L else position)
+            }
+            delay(500)
+        }
+    }
+    DisposableEffect(player) {
+        onDispose {
+            val p = player
+            if (p != null && vm.playingVod && p.duration > 0) vm.nowPlaying?.let { ch ->
+                vm.savePosition(ch.url, if (p.currentPosition > p.duration - 60_000) 0L else p.currentPosition)
+            }
+        }
     }
 
     LaunchedEffect(errorTick) {
@@ -417,6 +475,14 @@ fun PlayerScreen(vm: MainViewModel) {
                 PlayerView(it).apply {
                     useController = false
                     keepScreenOn = true
+                    // Readable subtitles: white on a soft dark box, a bit larger than default.
+                    subtitleView?.setStyle(
+                        CaptionStyleCompat(
+                            android.graphics.Color.WHITE, 0x99000000.toInt(), android.graphics.Color.TRANSPARENT,
+                            CaptionStyleCompat.EDGE_TYPE_OUTLINE, android.graphics.Color.BLACK, null,
+                        )
+                    )
+                    subtitleView?.setFractionalTextSize(0.062f)
                 }
             },
             update = {
@@ -444,6 +510,9 @@ fun PlayerScreen(vm: MainViewModel) {
                     Text("وقّف العرض على الشاشة", color = GoldLight)
                 }
             }
+        }
+        if (showTracks && !inPip) {
+            TracksDialog(tracks, player, onDismiss = { showTracks = false })
         }
         if (showTvPicker) {
             TvPickerDialog(
@@ -534,6 +603,12 @@ fun PlayerScreen(vm: MainViewModel) {
                     IconButton(onClick = { showList = true; interaction++ }, Modifier.size(iconBtn)) {
                         Icon(Icons.AutoMirrored.Filled.List, "القنوات", tint = Color.White, modifier = Modifier.size(icon))
                     }
+                    val hasChoices = tracks.groups.any { it.type == C.TRACK_TYPE_TEXT } ||
+                        tracks.groups.count { it.type == C.TRACK_TYPE_AUDIO } > 1
+                    IconButton(onClick = { showTracks = true; interaction++ }, Modifier.size(iconBtn)) {
+                        Icon(Icons.Filled.ClosedCaption, "الترجمة والصوت",
+                            tint = if (hasChoices) Gold else Color.White.copy(alpha = 0.6f), modifier = Modifier.size(icon))
+                    }
                     CastButton(Modifier.size(iconBtn))
                     IconButton(onClick = { showTvPicker = true; interaction++ }, Modifier.size(iconBtn)) {
                         Icon(Icons.Filled.ConnectedTv, "اعرض على شاشة سامسونج / LG",
@@ -574,13 +649,42 @@ fun PlayerScreen(vm: MainViewModel) {
                         }
                         BigButton(Icons.Filled.SkipNext, "التالية", if (compact) 56.dp else 72.dp) { player?.seekToNextMediaItem(); interaction++ }
                     }
+                    if (vm.playingVod && duration > 0) {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Row(
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                                    .padding(start = 16.dp, end = 16.dp, bottom = if (compact) 44.dp else 64.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                val shownPos = seeking?.let { (it * duration).toLong() } ?: position
+                                Text(clock(shownPos), color = Cream, fontSize = if (compact) 11.sp else 13.sp)
+                                Slider(
+                                    value = seeking ?: (position.toFloat() / duration).coerceIn(0f, 1f),
+                                    onValueChange = { seeking = it; interaction++ },
+                                    onValueChangeFinished = {
+                                        seeking?.let { f -> player?.seekTo((f * duration).toLong()); position = (f * duration).toLong() }
+                                        seeking = null
+                                    },
+                                    colors = SliderDefaults.colors(thumbColor = GoldLight, activeTrackColor = Gold, inactiveTrackColor = Gold.copy(alpha = 0.25f)),
+                                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                                )
+                                Text(clock(duration), color = Muted, fontSize = if (compact) 11.sp else 13.sp)
+                            }
+                        }
+                    }
                     Row(
                         Modifier.align(Alignment.BottomCenter).padding(bottom = if (compact) 6.dp else 18.dp)
                             .windowInsetsPadding(WindowInsets.safeDrawing),
                         horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
                     ) {
-                        PillButton(Icons.Filled.History, "القناة السابقة", compact) { backToPrevious() }
-                        PillButton(Icons.Filled.Dialpad, "رقم القناة", compact) { showKeypad = true; interaction++ }
+                        if (vm.playingVod) {
+                            PillButton(Icons.Filled.Replay10, "رجوع 10 ثواني", compact) { player?.seekBack(); interaction++ }
+                            PillButton(Icons.Filled.Forward10, "قدّام 10 ثواني", compact) { player?.seekForward(); interaction++ }
+                        } else {
+                            PillButton(Icons.Filled.History, "القناة السابقة", compact) { backToPrevious() }
+                            PillButton(Icons.Filled.Dialpad, "رقم القناة", compact) { showKeypad = true; interaction++ }
+                        }
                         if (Build.VERSION.SDK_INT >= 26) {
                             PillButton(Icons.Filled.PictureInPictureAlt, "صورة جوه صورة", compact) {
                                 (ctx.findActivity() as? MainActivity)?.enterPip()
@@ -739,6 +843,65 @@ private fun ChannelPanel(vm: MainViewModel, compact: Boolean, now: Long, onPick:
     }
 }
 
+private fun langName(code: String?): String {
+    if (code.isNullOrBlank() || code == "und") return "غير محددة"
+    return runCatching { Locale.forLanguageTag(code).getDisplayLanguage(Locale("ar")) }.getOrNull()?.ifBlank { null } ?: code
+}
+
+/** Subtitle and audio-language picker for whatever the stream offers. */
+@Composable
+private fun TracksDialog(tracks: Tracks, player: Player?, onDismiss: () -> Unit) {
+    val text = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
+    val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO && it.isSupported }
+    val textOff = player?.trackSelectionParameters?.disabledTrackTypes?.contains(C.TRACK_TYPE_TEXT) == true || text.none { it.isSelected }
+    fun choose(type: Int, group: Tracks.Group?) {
+        val p = player ?: return
+        val b = p.trackSelectionParameters.buildUpon()
+        if (group == null) b.setTrackTypeDisabled(type, true)
+        else b.setTrackTypeDisabled(type, false).setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, 0))
+        p.trackSelectionParameters = b.build()
+        onDismiss()
+    }
+    @Composable
+    fun option(label: String, selected: Boolean, onClick: () -> Unit) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(if (selected) Icons.Filled.RadioButtonChecked else Icons.Filled.RadioButtonUnchecked, null, tint = Gold)
+            Spacer(Modifier.size(10.dp))
+            Text(label, fontSize = 16.sp)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("الترجمة والصوت") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("الترجمة", color = Gold, fontWeight = FontWeight.Bold)
+                if (text.isEmpty()) {
+                    Text("القناة / الفيلم ده مفيهوش ترجمة مدمجة.", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
+                } else {
+                    option("بدون ترجمة", textOff) { choose(C.TRACK_TYPE_TEXT, null) }
+                    text.forEach { g ->
+                        val f = g.getTrackFormat(0)
+                        option(f.label ?: langName(f.language), g.isSelected && !textOff) { choose(C.TRACK_TYPE_TEXT, g) }
+                    }
+                }
+                if (audio.size > 1) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("لغة الصوت", color = Gold, fontWeight = FontWeight.Bold)
+                    audio.forEach { g ->
+                        val f = g.getTrackFormat(0)
+                        option(f.label ?: langName(f.language), g.isSelected) { choose(C.TRACK_TYPE_AUDIO, g) }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("تمام") } },
+    )
+}
+
 /** Looks for DLNA TVs on the Wi-Fi (Samsung, LG, Sony…) and lets the user pick one. */
 @Composable
 private fun TvPickerDialog(onDismiss: () -> Unit, onPick: (DlnaDevice) -> Unit) {
@@ -804,6 +967,12 @@ private fun CastButton(modifier: Modifier = Modifier) {
         },
         modifier = modifier,
     )
+}
+
+private fun clock(ms: Long): String {
+    val s = ms / 1000
+    return if (s >= 3600) String.format(Locale.US, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+    else String.format(Locale.US, "%d:%02d", s / 60, s % 60)
 }
 
 private fun hhmm(t: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(t))

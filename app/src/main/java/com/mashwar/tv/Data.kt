@@ -148,6 +148,10 @@ class Store(context: Context) {
     fun dead(playlistId: String): Set<String> = prefs.getStringSet("dead_$playlistId", emptySet())!!.toSet()
     fun saveDead(playlistId: String, urls: Set<String>) { prefs.edit().putStringSet("dead_$playlistId", urls).apply() }
 
+    /** Where the user stopped in a movie / episode, to resume. */
+    fun position(url: String): Long = prefs.getLong("pos_" + url.hashCode(), 0L)
+    fun savePosition(url: String, ms: Long) { prefs.edit().putLong("pos_" + url.hashCode(), ms).apply() }
+
     var lastChannelUrl: String?
         get() = prefs.getString("last_url", null)
         set(value) { prefs.edit().putString("last_url", value).apply() }

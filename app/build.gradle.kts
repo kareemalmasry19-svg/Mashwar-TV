@@ -12,8 +12,8 @@ android {
         applicationId = "com.mashwar.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.8.4"
+        versionCode = 20
+        versionName = "0.9.0"
     }
 
     // One fixed signing key for every build (CI included), so new versions

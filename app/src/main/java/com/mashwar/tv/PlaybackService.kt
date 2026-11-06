@@ -78,6 +78,10 @@ class PlaybackService : MediaLibraryService() {
             )
             .build()
         player.repeatMode = Player.REPEAT_MODE_ALL
+        // Arabic subtitles turn on by themselves when a movie / channel has them.
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setPreferredTextLanguages("ar", "ara")
+            .build()
         exo = player
         watchNetwork()
         player.addListener(object : Player.Listener {

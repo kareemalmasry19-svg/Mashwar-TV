@@ -132,3 +132,81 @@ suspend fun Xtream.shortEpg(acc: XtreamAccount, streamId: String): List<Programm
         if (title.isEmpty()) null else Programme(start, stop, title)
     }.sortedBy { it.start }
 }
+
+// ---------------------------------------------------------------- Movies & series (VOD)
+
+data class VodItem(val id: String, val name: String, val poster: String?, val category: String, val ext: String, val rating: String?)
+data class SeriesItem(val id: String, val name: String, val cover: String?, val category: String, val plot: String?, val rating: String?)
+data class Episode(val id: String, val season: Int, val num: Int, val title: String, val ext: String, val image: String?)
+data class SeriesDetail(val item: SeriesItem, val seasons: Map<Int, List<Episode>>)
+
+private fun XtreamAccount.q() = "username=${URLEncoder.encode(user, "UTF-8")}&password=${URLEncoder.encode(pass, "UTF-8")}"
+private fun XtreamAccount.enc(s: String) = URLEncoder.encode(s, "UTF-8")
+
+private fun fetch(url: String): String {
+    val req = Request.Builder().url(url).header("User-Agent", DEFAULT_UA).build()
+    sharedHttp.newCall(req).execute().use { r ->
+        if (!r.isSuccessful) error("السيرفر رد بـ ${r.code}")
+        return r.body?.string() ?: error("رد فاضي من السيرفر")
+    }
+}
+
+private fun categories(acc: XtreamAccount, action: String): Map<String, String> = runCatching {
+    val arr = JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=$action"))
+    (0 until arr.length()).associate { i -> arr.getJSONObject(i).let { it.optString("category_id") to it.optString("category_name") } }
+}.getOrDefault(emptyMap())
+
+private fun JSONObject.str(key: String) = optString(key).takeIf { it.isNotBlank() && it != "null" }
+
+suspend fun Xtream.movies(acc: XtreamAccount): List<VodItem> = withContext(Dispatchers.IO) {
+    val cats = categories(acc, "get_vod_categories")
+    val arr = JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=get_vod_streams"))
+    (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        val id = o.str("stream_id") ?: return@mapNotNull null
+        VodItem(
+            id, o.str("name") ?: "فيلم $id", o.str("stream_icon")?.takeIf { it.startsWith("http") },
+            cats[o.optString("category_id")] ?: GROUP_DEFAULT, o.str("container_extension") ?: "mp4",
+            o.str("rating")?.takeIf { it != "0" },
+        )
+    }
+}
+
+suspend fun Xtream.series(acc: XtreamAccount): List<SeriesItem> = withContext(Dispatchers.IO) {
+    val cats = categories(acc, "get_series_categories")
+    val arr = JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=get_series"))
+    (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        val id = o.str("series_id") ?: return@mapNotNull null
+        SeriesItem(
+            id, o.str("name") ?: "مسلسل $id", o.str("cover")?.takeIf { it.startsWith("http") },
+            cats[o.optString("category_id")] ?: GROUP_DEFAULT, o.str("plot"), o.str("rating")?.takeIf { it != "0" },
+        )
+    }
+}
+
+suspend fun Xtream.seriesInfo(acc: XtreamAccount, item: SeriesItem): SeriesDetail = withContext(Dispatchers.IO) {
+    val json = JSONObject(fetch("${acc.server}/player_api.php?${acc.q()}&action=get_series_info&series_id=${item.id}"))
+    val seasons = sortedMapOf<Int, MutableList<Episode>>()
+    fun add(o: JSONObject, seasonHint: Int?) {
+        val id = o.str("id") ?: return
+        val season = o.optString("season").toIntOrNull() ?: seasonHint ?: 1
+        val info = o.optJSONObject("info")
+        seasons.getOrPut(season) { ArrayList() } += Episode(
+            id, season, o.optString("episode_num").toIntOrNull() ?: 0,
+            o.str("title") ?: "الحلقة ${o.optString("episode_num")}", o.str("container_extension") ?: "mp4",
+            info?.str("movie_image")?.takeIf { it.startsWith("http") },
+        )
+    }
+    // Panels return "episodes" either as {"1":[...],"2":[...]} or as [[...],[...]].
+    json.optJSONObject("episodes")?.let { eps ->
+        eps.keys().forEach { k -> eps.optJSONArray(k)?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { add(it, k.toIntOrNull()) } } }
+    } ?: json.optJSONArray("episodes")?.let { outer ->
+        for (s in 0 until outer.length()) outer.optJSONArray(s)?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { add(it, s + 1) } }
+    }
+    val plot = json.optJSONObject("info")?.str("plot") ?: item.plot
+    SeriesDetail(item.copy(plot = plot), seasons.mapValues { (_, v) -> v.sortedBy { it.num } })
+}
+
+fun XtreamAccount.movieUrl(v: VodItem) = "$server/movie/${enc(user)}/${enc(pass)}/${v.id}.${v.ext}"
+fun XtreamAccount.episodeUrl(e: Episode) = "$server/series/${enc(user)}/${enc(pass)}/${e.id}.${e.ext}"

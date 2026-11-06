@@ -254,7 +254,76 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun closePlaylist() {
         current = null
         channels = emptyList()
+        section = Section.LIVE
+        movies = null; seriesList = null; seriesDetail = null; vodError = null
     }
+
+    // ---------- Movies & series (Xtream VOD)
+    enum class Section { LIVE, MOVIES, SERIES }
+    var section by mutableStateOf(Section.LIVE)
+    var movies by mutableStateOf<List<VodItem>?>(null)
+        private set
+    var seriesList by mutableStateOf<List<SeriesItem>?>(null)
+        private set
+    var seriesDetail by mutableStateOf<SeriesDetail?>(null)
+        private set
+    var vodLoading by mutableStateOf(false)
+        private set
+    var vodError by mutableStateOf<String?>(null)
+        private set
+
+    val xtream: XtreamAccount? get() = current?.source?.let { XtreamAccount.decode(it) }
+
+    fun loadMovies(force: Boolean = false) {
+        val acc = xtream ?: return
+        if ((movies != null && !force) || vodLoading) return
+        viewModelScope.launch {
+            vodLoading = true; vodError = null
+            runCatching { Xtream.movies(acc) }.onSuccess { movies = it }.onFailure { vodError = it.message }
+            vodLoading = false
+        }
+    }
+
+    fun loadSeries(force: Boolean = false) {
+        val acc = xtream ?: return
+        if ((seriesList != null && !force) || vodLoading) return
+        viewModelScope.launch {
+            vodLoading = true; vodError = null
+            runCatching { Xtream.series(acc) }.onSuccess { seriesList = it }.onFailure { vodError = it.message }
+            vodLoading = false
+        }
+    }
+
+    fun openSeries(item: SeriesItem) {
+        val acc = xtream ?: return
+        viewModelScope.launch {
+            vodLoading = true
+            runCatching { Xtream.seriesInfo(acc, item) }
+                .onSuccess { seriesDetail = it }
+                .onFailure { message = "مقدرتش أفتح المسلسل: ${it.message}" }
+            vodLoading = false
+        }
+    }
+
+    fun closeSeries() { seriesDetail = null }
+
+    fun playMovie(v: VodItem) {
+        val acc = xtream ?: return
+        play(listOf(Channel(v.name, acc.movieUrl(v), v.poster, v.category)), 0, vod = true)
+    }
+
+    /** Plays a season from the chosen episode; the next episode starts by itself. */
+    fun playEpisodes(d: SeriesDetail, episodes: List<Episode>, index: Int) {
+        val acc = xtream ?: return
+        val list = episodes.map { e ->
+            Channel("${d.item.name} • م${e.season} ح${e.num}" + if (e.title.isNotBlank() && !e.title.startsWith(d.item.name)) " • ${e.title}" else "",
+                acc.episodeUrl(e), e.image ?: d.item.cover, d.item.name)
+        }
+        play(list, index, vod = true)
+    }
+
+    fun resumePosition(url: String) = store.position(url)
+    fun savePosition(url: String, ms: Long) = store.savePosition(url, ms)
 
     fun toggleFavorite(c: Channel) {
         favorites = if (c.url in favorites) favorites - c.url else favorites + c.url
@@ -275,8 +344,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var previousChannel: Channel? = null
         private set
 
-    fun play(list: List<Channel>, index: Int) {
-        nowPlaying?.let { if (it.url != list.getOrNull(index)?.url) previousChannel = it }
+    /** True while a movie / episode is playing (seek bar, resume, no looping). */
+    var playingVod by mutableStateOf(false)
+        private set
+
+    fun play(list: List<Channel>, index: Int, vod: Boolean = false) {
+        if (!vod && !playingVod) nowPlaying?.let { if (it.url != list.getOrNull(index)?.url) previousChannel = it }
+        playingVod = vod
         queue = list
         playingIndex = index
         queueVersion++
