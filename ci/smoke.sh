@@ -41,6 +41,9 @@ screen home
 tap "جرّب بقائمة تجريبية"
 sleep 6
 screen channels
+tap "فحص القنوات"
+sleep 25
+screen after-scan
 adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
 FIRST=$(python3 - <<'PY'
 import re
@@ -83,6 +86,27 @@ sleep 8
 screen tv-picker
 adb shell input keyevent KEYCODE_BACK
 sleep 2
+adb shell input tap 20 $(( ${W%x*} / 3 ))
+sleep 1
+screen before-keypad
+tap "رقم القناة" nodump
+sleep 2
+screen keypad
+tap "3" nodump
+sleep 1
+adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
+tap "OK" nodump
+sleep 6
+adb shell input keyevent KEYCODE_MEDIA_PAUSE
+sleep 2
+adb shell input tap 20 $(( ${W%x*} / 3 ))
+sleep 1
+screen after-zap
+adb shell input keyevent KEYCODE_HOME
+sleep 4
+screen pip-home
+adb shell am start -n com.mashwar.tv/.MainActivity
+sleep 3
 adb shell input keyevent KEYCODE_BACK
 sleep 2
 adb shell input keyevent KEYCODE_HOME
