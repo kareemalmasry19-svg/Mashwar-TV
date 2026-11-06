@@ -2,6 +2,22 @@
 
 package com.mashwar.tv
 
+import kotlinx.coroutines.withContext
+
+import kotlinx.coroutines.Dispatchers
+
+import androidx.compose.ui.text.TextStyle
+
+import androidx.compose.runtime.produceState
+
+import androidx.compose.material3.OutlinedTextFieldDefaults
+
+import androidx.compose.material3.OutlinedTextField
+
+import androidx.compose.material.icons.filled.Close
+
+import androidx.compose.material.icons.filled.Search
+
 import android.app.Activity
 import android.content.Context
 import android.content.ComponentName
@@ -18,7 +34,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.automirrored.filled.List
@@ -83,6 +99,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -237,7 +254,7 @@ fun PlayerScreen(vm: MainViewModel) {
             }
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
                 error = null
-                vm.syncIndex(p.currentMediaItemIndex)
+                vm.syncIndex(vm.windowStart + p.currentMediaItemIndex)
             }
             override fun onPlayerError(e: PlaybackException) {
                 // The service retries some errors itself (live edge, other stream formats);
@@ -254,7 +271,8 @@ fun PlayerScreen(vm: MainViewModel) {
         val p = player ?: return@LaunchedEffect
         error = null
         buffering = true
-        p.setMediaItems(vm.queue.map { it.toMediaItem() }, vm.playingIndex.coerceAtLeast(0), C.TIME_UNSET)
+        val (window, startIdx) = vm.playerWindow()
+        p.setMediaItems(window.map { it.toMediaItem() }, startIdx, C.TIME_UNSET)
         p.prepare()
         p.play()
         showControls = true
@@ -454,16 +472,22 @@ fun PlayerScreen(vm: MainViewModel) {
         }
         AnimatedVisibility(
             showList,
-            enter = slideInHorizontally { it } + fadeIn(),
-            exit = slideOutHorizontally { it } + fadeOut(),
-            modifier = Modifier.align(Alignment.CenterStart),
+            enter = slideInHorizontally { -it } + fadeIn(),
+            exit = slideOutHorizontally { -it } + fadeOut(),
+            modifier = Modifier.align(AbsoluteAlignment.CenterLeft),
         ) {
             ChannelPanel(
                 vm = vm,
                 compact = compact,
                 onPick = { i ->
-                    player?.seekTo(i, C.TIME_UNSET)
-                    player?.play()
+                    val local = i - vm.windowStart
+                    val p = player
+                    if (p != null && local in 0 until p.mediaItemCount) {
+                        p.seekTo(local, C.TIME_UNSET)
+                        p.play()
+                    } else {
+                        vm.play(vm.queue, i) // outside the loaded window: reload around it
+                    }
                     showList = false
                     interaction++
                 },
@@ -474,26 +498,57 @@ fun PlayerScreen(vm: MainViewModel) {
 
 @Composable
 private fun ChannelPanel(vm: MainViewModel, compact: Boolean, onPick: (Int) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    // (index in queue, channel) so picks from search results still map to the right channel.
+    val shown by produceState(vm.queue.withIndex().toList(), vm.queue, query) {
+        val q = query.trim()
+        if (q.isNotEmpty()) delay(120)
+        value = withContext(Dispatchers.Default) {
+            val all = vm.queue.withIndex()
+            if (q.isEmpty()) all.toList() else all.filter { it.value.name.contains(q, ignoreCase = true) }
+        }
+    }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (vm.playingIndex - 3).coerceAtLeast(0))
+    LaunchedEffect(query) { if (query.isNotEmpty()) listState.scrollToItem(0) }
     Column(
-        Modifier.fillMaxHeight().width(if (compact) 250.dp else 340.dp)
-            .background(Color(0xF20A0A0B))
-            .border(1.dp, Gold.copy(alpha = 0.5f))
+        Modifier.fillMaxHeight().width(if (compact) 260.dp else 360.dp)
+            .background(Brush.horizontalGradient(listOf(Color(0xFA050505), Color(0xF2121014))))
+            .border(1.dp, GoldBrush)
             .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
         Text(
             vm.nowPlaying?.group ?: "القنوات",
-            color = Gold, fontWeight = FontWeight.Bold, fontSize = if (compact) 15.sp else 18.sp,
+            style = TextStyle(brush = shimmeringGold(), fontWeight = FontWeight.Bold, fontSize = if (compact) 15.sp else 19.sp),
             maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
         )
-        HorizontalDivider(color = Gold.copy(alpha = 0.35f))
+        OutlinedTextField(
+            value = query, onValueChange = { query = it },
+            placeholder = { Text("دوّر على قناة…", fontSize = 14.sp) },
+            leadingIcon = { Icon(Icons.Filled.Search, null, tint = Gold) },
+            trailingIcon = {
+                if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "مسح", tint = Muted) }
+            },
+            singleLine = true,
+            textStyle = TextStyle(fontSize = 15.sp, color = Cream),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Gold, unfocusedBorderColor = Gold.copy(alpha = 0.4f), cursorColor = Gold,
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+        HorizontalDivider(Modifier.padding(top = 6.dp), color = Gold.copy(alpha = 0.35f))
+        if (shown.isEmpty()) {
+            Text("مفيش قناة بالاسم ده", color = Muted, modifier = Modifier.padding(16.dp))
+        }
         LazyColumn(state = listState) {
-            itemsIndexed(vm.queue, key = { i, c -> "$i-${c.url}" }) { i, c ->
+            items(shown, key = { "${it.index}-${it.value.url}" }) { (i, c) ->
                 val selected = i == vm.playingIndex
                 Row(
                     Modifier.fillMaxWidth()
-                        .background(if (selected) Gold.copy(alpha = 0.18f) else Color.Transparent)
+                        .background(
+                            if (selected) Brush.horizontalGradient(listOf(Gold.copy(alpha = 0.35f), Gold.copy(alpha = 0.08f)))
+                            else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
+                        )
                         .clickable { onPick(i) }
                         .padding(horizontal = 12.dp, vertical = if (compact) 6.dp else 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -599,7 +654,7 @@ private fun CastButton(modifier: Modifier = Modifier) {
 private fun BigButton(icon: ImageVector, label: String, size: Dp, onClick: () -> Unit) {
     Box(
         Modifier.size(size).background(Color(0xB3000000), CircleShape)
-            .border(1.5.dp, GoldBrush, CircleShape).clickable(onClick = onClick),
+            .border(2.dp, GoldBrush, CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, label, tint = GoldLight, modifier = Modifier.size(size * 0.6f))

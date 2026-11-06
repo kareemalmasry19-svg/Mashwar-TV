@@ -117,6 +117,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var queueVersion by mutableIntStateOf(0)
         private set
 
+    /** Index in [queue] of the player's first item: the player only holds a window around the pick. */
+    var windowStart = 0
+
     fun play(list: List<Channel>, index: Int) {
         queue = list
         playingIndex = index
@@ -125,6 +128,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Called when the player itself moves (next/previous, steering wheel, car screen). */
+    /** Player items for the current pick: at most ±[WINDOW] channels around it (big lists froze the app). */
+    fun playerWindow(): Pair<List<Channel>, Int> {
+        val i = playingIndex.coerceIn(0, (queue.size - 1).coerceAtLeast(0))
+        val start = (i - WINDOW).coerceAtLeast(0)
+        val end = (i + WINDOW + 1).coerceAtMost(queue.size)
+        windowStart = start
+        return queue.subList(start, end) to (i - start)
+    }
+
     fun syncIndex(i: Int) {
         if (i !in queue.indices || i == playingIndex) return
         playingIndex = i
@@ -144,3 +156,5 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         playingIndex = -1
     }
 }
+
+private const val WINDOW = 100

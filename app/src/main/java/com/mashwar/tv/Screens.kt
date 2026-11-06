@@ -137,7 +137,7 @@ fun HomeScreen(vm: MainViewModel) {
                         Card(
                             Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable { vm.open(p) },
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            border = BorderStroke(1.dp, Gold.copy(alpha = 0.35f)),
+                            border = BorderStroke(1.dp, GoldBrush),
                         ) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Filled.Tv, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
@@ -314,7 +314,7 @@ private fun ChannelRow(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () 
     ) {
         Box(
             Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).background(InkHigh)
-                .border(1.dp, Gold.copy(alpha = 0.3f), RoundedCornerShape(10.dp)),
+                .border(1.dp, GoldBrush, RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center,
         ) {
             if (c.logo != null) {
@@ -343,7 +343,7 @@ fun BrandTitle(compact: Boolean = false) {
     Text(
         "KENUE TV",
         style = TextStyle(
-            brush = GoldBrush,
+            brush = shimmeringGold(),
             fontFamily = FontFamily.Serif,
             fontWeight = FontWeight.Bold,
             fontSize = if (compact) 18.sp else 24.sp,
