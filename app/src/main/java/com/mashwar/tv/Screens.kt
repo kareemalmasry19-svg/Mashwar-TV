@@ -1,5 +1,11 @@
 package com.mashwar.tv
 
+import androidx.compose.ui.draw.alpha
+
+import androidx.compose.material.icons.filled.NetworkCheck
+
+import androidx.compose.material.icons.filled.Event
+
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -166,14 +172,27 @@ fun HomeScreen(vm: MainViewModel) {
     if (showAdd) AddPlaylistDialog(vm) { showAdd = false }
     toRename?.let { p ->
         var newName by remember(p.id) { mutableStateOf(p.name) }
+        var newEpg by remember(p.id) { mutableStateOf(p.epgUrl ?: "") }
         AlertDialog(
             onDismissRequest = { toRename = null },
-            title = { Text("تغيير اسم القائمة") },
+            title = { Text("تعديل القائمة") },
             text = {
-                OutlinedTextField(newName, { newName = it }, singleLine = true, label = { Text("الاسم") })
+                Column {
+                    OutlinedTextField(newName, { newName = it }, singleLine = true, label = { Text("الاسم") })
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        newEpg, { newEpg = it }, singleLine = true,
+                        label = { Text("رابط دليل البرامج EPG (اختياري)") },
+                        placeholder = { Text("https://…/epg.xml.gz") },
+                    )
+                }
             },
             confirmButton = {
-                TextButton(onClick = { vm.rename(p, newName); toRename = null }, enabled = newName.isNotBlank()) { Text("حفظ") }
+                TextButton(onClick = {
+                    vm.rename(p, newName)
+                    if (newEpg.trim() != (p.epgUrl ?: "")) vm.setEpgUrl(vm.playlists.first { it.id == p.id }, newEpg)
+                    toRename = null
+                }, enabled = newName.isNotBlank()) { Text("حفظ") }
             },
             dismissButton = { TextButton(onClick = { toRename = null }) { Text("إلغاء") } },
         )
@@ -239,15 +258,40 @@ fun ChannelsScreen(vm: MainViewModel) {
     var group by remember { mutableStateOf(ALL) }
     val groups = remember(vm.channels) { listOf(ALL, FAVS) + vm.channels.map { it.group }.distinct() }
     // Filtering thousands of channels on every keystroke janks the UI: do it off the main thread.
-    val filtered by produceState(vm.channels, vm.channels, query, group, vm.favorites) {
+    var showDead by remember { mutableStateOf(false) }
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) { delay(30_000); value = System.currentTimeMillis() }
+    }
+    vm.scanProgress?.let { (done, total) ->
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("فحص القنوات") },
+            text = {
+                Column {
+                    Text("بجرّب كل قناة… $done من $total")
+                    Spacer(Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        progress = { if (total == 0) 0f else done.toFloat() / total },
+                        modifier = Modifier.fillMaxWidth(), color = Gold, trackColor = Gold.copy(alpha = 0.2f),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("القنوات اللي مش شغالة هتتخفي من القائمة.", fontSize = 13.sp, color = Muted)
+                }
+            },
+            confirmButton = { TextButton(onClick = { vm.cancelScan() }) { Text("إيقاف") } },
+        )
+    }
+    val filtered by produceState(vm.channels, vm.channels, query, group, vm.favorites, vm.dead, showDead) {
         if (query.isNotBlank()) delay(150)
         val all = vm.channels
         val favs = vm.favorites
+        val dead = if (showDead) emptySet() else vm.dead
         val q = query.trim()
         value = withContext(Dispatchers.Default) {
-            if (group == ALL && q.isEmpty()) all
+            if (group == ALL && q.isEmpty() && dead.isEmpty()) all
             else all.filter { c ->
-                (group == ALL || (group == FAVS && c.url in favs) || c.group == group) &&
+                c.url !in dead &&
+                    (group == ALL || (group == FAVS && c.url in favs) || c.group == group) &&
                     (q.isEmpty() || c.name.contains(q, ignoreCase = true))
             }
         }
@@ -259,6 +303,14 @@ fun ChannelsScreen(vm: MainViewModel) {
                 title = { Text(vm.current?.name ?: "", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { vm.closePlaylist() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "رجوع") }
+                },
+                actions = {
+                    if (vm.current?.epgUrl != null) {
+                        IconButton(onClick = { vm.current?.let { vm.loadEpg(it, force = true) } }, enabled = !vm.epgLoading) {
+                            Icon(Icons.Filled.Event, "تحديث دليل البرامج", tint = if (vm.epgLoading) Muted else Gold)
+                        }
+                    }
+                    IconButton(onClick = { vm.scanChannels() }) { Icon(Icons.Filled.NetworkCheck, "فحص القنوات", tint = Gold) }
                 },
             )
         },
@@ -292,14 +344,23 @@ fun ChannelsScreen(vm: MainViewModel) {
                     }
                 }
             }
-            Text(
-                "${filtered.size} قناة",
-                Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${filtered.size} قناة", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                if (vm.epgLoading) Text("بيحمّل دليل البرامج…", color = Muted, fontSize = 12.sp)
+                if (vm.dead.isNotEmpty()) {
+                    FilterChip(
+                        selected = showDead, onClick = { showDead = !showDead },
+                        label = { Text(if (showDead) "إخفاء الواقعة (${vm.dead.size})" else "إظهار الواقعة (${vm.dead.size})", fontSize = 13.sp) },
+                    )
+                }
+            }
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 itemsIndexed(filtered, key = { i, c -> "$i-${c.url}" }, contentType = { _, _ -> "channel" }) { i, c ->
-                    ChannelRow(c, c.url in vm.favorites, onFav = { vm.toggleFavorite(c) }) { vm.play(filtered, i) }
+                    ChannelRow(
+                        c, c.url in vm.favorites, dead = c.url in vm.dead,
+                        now = vm.epg?.nowNext(c, now)?.first, time = now,
+                        onFav = { vm.toggleFavorite(c) },
+                    ) { vm.play(filtered, i) }
                 }
             }
         }
@@ -307,9 +368,12 @@ fun ChannelsScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun ChannelRow(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
+private fun ChannelRow(
+    c: Channel, fav: Boolean, dead: Boolean, now: Programme?, time: Long,
+    onFav: () -> Unit, onClick: () -> Unit,
+) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().alpha(if (dead) 0.45f else 1f).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -326,7 +390,18 @@ private fun ChannelRow(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () 
         Spacer(Modifier.size(14.dp))
         Column(Modifier.weight(1f)) {
             Text(c.name, fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(c.group, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            when {
+                dead -> Text("مش شغالة في آخر فحص", fontSize = 13.sp, color = MaterialTheme.colorScheme.error, maxLines = 1)
+                now != null -> {
+                    Text(now.title, fontSize = 13.sp, color = GoldLight, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    LinearProgressIndicator(
+                        progress = { ((time - now.start).toFloat() / (now.stop - now.start).coerceAtLeast(1)).coerceIn(0f, 1f) },
+                        modifier = Modifier.padding(top = 4.dp).fillMaxWidth(0.7f).height(2.dp),
+                        color = Gold, trackColor = Gold.copy(alpha = 0.2f),
+                    )
+                }
+                else -> Text(c.group, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
         }
         IconButton(onClick = onFav, modifier = Modifier.size(52.dp)) {
             Icon(

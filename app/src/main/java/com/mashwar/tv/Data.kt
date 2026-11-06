@@ -20,6 +20,7 @@ data class Channel(
     val group: String,
     val userAgent: String? = null,
     val referrer: String? = null,
+    val tvgId: String? = null,
 )
 
 data class Playlist(
@@ -27,6 +28,8 @@ data class Playlist(
     val name: String,
     val source: String,
     val isUri: Boolean,
+    /** XMLTV programme guide URL (from the M3U header or set by the user). */
+    val epgUrl: String? = null,
 )
 
 /** Parses M3U / M3U8 (extended) playlists, including VLC options and Kodi-style "url|User-Agent=..". */
@@ -40,9 +43,10 @@ object M3uParser {
         var group = GROUP_DEFAULT
         var ua: String? = null
         var ref: String? = null
+        var tvgId: String? = null
 
         fun reset() {
-            name = null; logo = null; group = GROUP_DEFAULT; ua = null; ref = null
+            name = null; logo = null; group = GROUP_DEFAULT; ua = null; ref = null; tvgId = null
         }
 
         text.lineSequence().forEach { raw ->
@@ -53,6 +57,7 @@ object M3uParser {
                     val attrs = attrRegex.findAll(line)
                         .associate { it.groupValues[1].lowercase() to it.groupValues[2] }
                     logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }
+                    tvgId = attrs["tvg-id"]?.trim()?.takeIf { it.isNotBlank() }
                     group = attrs["group-title"]?.takeIf { it.isNotBlank() } ?: GROUP_DEFAULT
                     val stripped = attrRegex.replace(line, "")
                     name = stripped.substringAfter(",", "").trim()
@@ -82,12 +87,20 @@ object M3uParser {
                         }
                     }
                     val fallback = url.substringAfterLast('/').substringBefore('?').ifBlank { "قناة" }
-                    out += Channel(name ?: fallback, url, logo, group, ua, ref)
+                    out += Channel(name ?: fallback, url, logo, group, ua, ref, tvgId)
                     reset()
                 }
             }
         }
         return out
+    }
+
+    /** EPG URL from the "#EXTM3U x-tvg-url=..." / "url-tvg=..." header, if any. */
+    fun epgUrlOf(text: String): String? {
+        val header = text.lineSequence().take(5).firstOrNull { it.trim().removePrefix("\uFEFF").startsWith("#EXTM3U", true) } ?: return null
+        val attrs = attrRegex.findAll(header).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
+        return (attrs["x-tvg-url"] ?: attrs["url-tvg"] ?: attrs["tvg-url"])
+            ?.split(',')?.map { it.trim() }?.firstOrNull { it.startsWith("http") }
     }
 }
 
@@ -100,14 +113,20 @@ class Store(context: Context) {
         val arr = JSONArray(prefs.getString("playlists", "[]"))
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
-            Playlist(o.getString("id"), o.getString("name"), o.getString("source"), o.optBoolean("isUri"))
+            Playlist(
+                o.getString("id"), o.getString("name"), o.getString("source"), o.optBoolean("isUri"),
+                o.optString("epgUrl").ifBlank { null },
+            )
         }
     }
 
     fun savePlaylists(list: List<Playlist>) {
         val arr = JSONArray()
         list.forEach {
-            arr.put(JSONObject().put("id", it.id).put("name", it.name).put("source", it.source).put("isUri", it.isUri))
+            arr.put(
+                JSONObject().put("id", it.id).put("name", it.name).put("source", it.source).put("isUri", it.isUri)
+                    .put("epgUrl", it.epgUrl ?: "")
+            )
         }
         prefs.edit().putString("playlists", arr.toString()).apply()
     }
@@ -124,6 +143,10 @@ class Store(context: Context) {
     var maxQuality: Int
         get() = prefs.getInt("max_quality", 0)
         set(value) { prefs.edit().putInt("max_quality", value).apply() }
+
+    /** Channels the last scan found not working, per playlist. */
+    fun dead(playlistId: String): Set<String> = prefs.getStringSet("dead_$playlistId", emptySet())!!.toSet()
+    fun saveDead(playlistId: String, urls: Set<String>) { prefs.edit().putStringSet("dead_$playlistId", urls).apply() }
 
     var lastChannelUrl: String?
         get() = prefs.getString("last_url", null)

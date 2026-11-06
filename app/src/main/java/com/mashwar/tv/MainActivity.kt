@@ -3,7 +3,11 @@ package com.mashwar.tv
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.app.PictureInPictureParams
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
+import androidx.lifecycle.Lifecycle
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -50,7 +54,27 @@ class MainActivity : FragmentActivity() {
                 .diskCache { DiskCache.Builder().directory(cacheDir.resolve("logos")).maxSizeBytes(100L * 1024 * 1024).build() }
                 .build()
         )
+        addOnPictureInPictureModeChangedListener { info ->
+            PipState.inPip = info.isInPictureInPictureMode
+            // Closing the PiP window leaves the activity stopped: tell the player to stop too.
+            if (!info.isInPictureInPictureMode && !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                PipState.dismissed++
+            }
+        }
         setContent { App() }
+    }
+
+    /** Home / recents while watching → keep watching in a small floating window. */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (PipState.playerActive) enterPip()
+    }
+
+    fun enterPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        runCatching {
+            enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
+        }
     }
 }
 

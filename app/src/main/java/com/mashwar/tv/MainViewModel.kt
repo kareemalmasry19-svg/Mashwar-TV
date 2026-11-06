@@ -8,6 +8,12 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -54,20 +60,111 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             message = "الملف ده مفيهوش قنوات (اتأكد إنه M3U)"
             return
         }
-        val p = Playlist(UUID.randomUUID().toString(), name.ifBlank { "قائمة ${playlists.size + 1}" }, source, isUri)
+        val p = Playlist(
+            UUID.randomUUID().toString(), name.ifBlank { "قائمة ${playlists.size + 1}" }, source, isUri,
+            epgUrl = M3uParser.epgUrlOf(text),
+        )
         withContext(Dispatchers.IO) { store.saveRaw(p.id, text) }
         playlists = playlists + p
         store.savePlaylists(playlists)
         message = "اتضافت ${parsed.size} قناة"
         channels = parsed // already parsed: open straight away
         current = p
+        dead = emptySet()
+        loadEpg(p)
     }
 
     fun open(p: Playlist) = viewModelScope.launch {
         loading = true
-        channels = withContext(Dispatchers.IO) { M3uParser.parse(store.loadRaw(p.id) ?: "") }
-        current = p
+        val raw = withContext(Dispatchers.IO) { store.loadRaw(p.id) ?: "" }
+        channels = withContext(Dispatchers.Default) { M3uParser.parse(raw) }
+        // Older playlists: pick up the guide URL from the file header the first time.
+        var pl = p
+        if (pl.epgUrl == null) M3uParser.epgUrlOf(raw)?.let { url -> pl = p.copy(epgUrl = url); replacePlaylist(pl) }
+        current = pl
+        dead = store.dead(pl.id)
         loading = false
+        loadEpg(pl)
+    }
+
+    // ---------- Programme guide (EPG)
+    var epg by mutableStateOf<EpgData?>(null)
+        private set
+    var epgLoading by mutableStateOf(false)
+        private set
+    private var epgJob: Job? = null
+
+    fun loadEpg(p: Playlist, force: Boolean = false) {
+        epgJob?.cancel()
+        epg = null
+        if (p.epgUrl == null) return
+        val list = channels
+        epgJob = viewModelScope.launch {
+            epgLoading = true
+            val data = Epg.load(getApplication(), p, list, force)
+            if (current?.id == p.id) {
+                epg = data
+                if (force) message = if (data == null || data.isEmpty) "دليل البرامج مفيهوش بيانات للقنوات دي" else "اتحدّث دليل البرامج"
+            }
+            epgLoading = false
+        }
+    }
+
+    fun setEpgUrl(p: Playlist, url: String) {
+        val u = url.trim().ifEmpty { null }
+        val updated = p.copy(epgUrl = u)
+        replacePlaylist(updated)
+        if (current?.id == p.id) { current = updated; loadEpg(updated, force = true) }
+    }
+
+    private fun replacePlaylist(p: Playlist) {
+        playlists = playlists.map { if (it.id == p.id) p else it }
+        store.savePlaylists(playlists)
+    }
+
+    // ---------- Dead-channel scan
+    var dead by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var scanProgress by mutableStateOf<Pair<Int, Int>?>(null)
+        private set
+    private var scanJob: Job? = null
+
+    fun scanChannels() {
+        val p = current ?: return
+        val list = channels.distinctBy { it.url }
+        if (list.isEmpty() || scanJob?.isActive == true) return
+        scanJob = viewModelScope.launch {
+            val bad = ConcurrentHashMap.newKeySet<String>()
+            val done = AtomicInteger()
+            scanProgress = 0 to list.size
+            val gate = Semaphore(12)
+            coroutineScope {
+                list.forEach { c ->
+                    launch {
+                        gate.withPermit {
+                            if (!ChannelScanner.isAlive(c)) bad += c.url
+                            val d = done.incrementAndGet()
+                            if (d % 4 == 0 || d == list.size) scanProgress = d to list.size
+                        }
+                    }
+                }
+            }
+            dead = bad.toSet()
+            store.saveDead(p.id, dead)
+            scanProgress = null
+            message = if (dead.isEmpty()) "كل القنوات شغالة ✓" else "لقيت ${dead.size} قناة مش شغالة واتخفت"
+        }
+    }
+
+    fun cancelScan() {
+        scanJob?.cancel()
+        scanProgress = null
+    }
+
+    fun clearDead() {
+        val p = current ?: return
+        dead = emptySet()
+        store.saveDead(p.id, emptySet())
     }
 
     fun refresh(p: Playlist) = viewModelScope.launch {
@@ -120,7 +217,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Index in [queue] of the player's first item: the player only holds a window around the pick. */
     var windowStart = 0
 
+    /** The channel watched before the current one (receiver-style "last channel"). */
+    var previousChannel: Channel? = null
+        private set
+
     fun play(list: List<Channel>, index: Int) {
+        nowPlaying?.let { if (it.url != list.getOrNull(index)?.url) previousChannel = it }
         queue = list
         playingIndex = index
         queueVersion++
@@ -139,6 +241,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun syncIndex(i: Int) {
         if (i !in queue.indices || i == playingIndex) return
+        nowPlaying?.let { previousChannel = it }
         playingIndex = i
         store.lastChannelUrl = queue[i].url
     }

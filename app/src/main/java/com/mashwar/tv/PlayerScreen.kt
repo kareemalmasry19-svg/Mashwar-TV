@@ -2,6 +2,34 @@
 
 package com.mashwar.tv
 
+import java.util.Date
+
+import java.text.SimpleDateFormat
+
+import androidx.compose.material3.LinearProgressIndicator
+
+import androidx.compose.material.icons.filled.PictureInPictureAlt
+
+import androidx.compose.material.icons.filled.Dialpad
+
+import androidx.compose.material.icons.filled.History
+
+import androidx.compose.ui.input.key.type
+
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+
+import androidx.compose.ui.input.key.KeyEventType
+
+import androidx.compose.ui.focus.focusRequester
+
+import androidx.compose.ui.focus.FocusRequester
+
+import androidx.compose.foundation.focusable
+
+import android.view.KeyEvent as AndroidKey
+
+import android.os.Build
+
 import androidx.compose.ui.graphics.RectangleShape
 
 import kotlinx.coroutines.withContext
@@ -196,7 +224,10 @@ fun PlayerScreen(vm: MainViewModel) {
     val cfg = LocalConfiguration.current
     val shortSide = minOf(cfg.screenWidthDp, cfg.screenHeightDp)
     val longSide = maxOf(cfg.screenWidthDp, cfg.screenHeightDp)
-    val compact = shortSide < 480 && longSide < shortSide * 1.4f
+    val compactNow = shortSide < 480 && longSide < shortSide * 1.4f
+    var compact by remember { mutableStateOf(compactNow) }
+    LaunchedEffect(compactNow, PipState.inPip) { if (!PipState.inPip) compact = compactNow }
+    val inPip = PipState.inPip
     var isPlaying by remember { mutableStateOf(false) }
     var buffering by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -206,6 +237,22 @@ fun PlayerScreen(vm: MainViewModel) {
     var retryKey by remember { mutableIntStateOf(0) }
     var errorTick by remember { mutableIntStateOf(0) }
     var showList by remember { mutableStateOf(false) }
+    var showKeypad by remember { mutableStateOf(false) }
+    var typed by remember { mutableStateOf("") }
+    var zapNote by remember { mutableStateOf<String?>(null) }
+    val focus = remember { FocusRequester() }
+
+    // Leaving the app while watching shrinks the player into a PiP window (see MainActivity).
+    DisposableEffect(Unit) {
+        PipState.playerActive = true
+        onDispose { PipState.playerActive = false }
+    }
+    LaunchedEffect(PipState.dismissed) { if (PipState.dismissed > 0) player?.pause() }
+    LaunchedEffect(inPip) { if (inPip) { showList = false; showKeypad = false } }
+
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) { delay(30_000); value = System.currentTimeMillis() }
+    }
     var showTvPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val dlna = DlnaCast.active
@@ -315,7 +362,56 @@ fun PlayerScreen(vm: MainViewModel) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    // Jump to a channel by its position in the list (keeps the player window logic in one place).
+    val jump: (Int) -> Unit = { i ->
+        val local = i - vm.windowStart
+        val p = player
+        if (p != null && local in 0 until p.mediaItemCount) {
+            p.seekTo(local, C.TIME_UNSET)
+            p.play()
+        } else if (i in vm.queue.indices) {
+            vm.play(vm.queue, i) // outside the loaded window: reload around it
+        }
+        interaction++
+    }
+    val backToPrevious: () -> Unit = {
+        val prev = vm.previousChannel
+        val i = prev?.let { pc -> vm.queue.indexOfFirst { it.url == pc.url } } ?: -1
+        if (i >= 0) jump(i) else zapNote = "مفيش قناة سابقة"
+    }
+    fun commitNumber() {
+        val n = typed.toIntOrNull()
+        typed = ""
+        if (n == null) return
+        if (n in 1..vm.queue.size) { jump(n - 1); zapNote = null } else zapNote = "مفيش قناة رقم $n"
+    }
+    // Receiver behaviour: digits wait a moment for the next digit, then switch.
+    LaunchedEffect(typed) {
+        if (typed.isEmpty()) return@LaunchedEffect
+        delay(if (typed.length >= 4) 300 else 1_800)
+        commitNumber()
+    }
+    LaunchedEffect(zapNote) { if (zapNote != null) { delay(2_000); zapNote = null } }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+
+    Box(
+        Modifier.fillMaxSize().background(Color.Black)
+            .focusRequester(focus).focusable()
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val code = e.nativeKeyEvent.keyCode
+                when {
+                    code in AndroidKey.KEYCODE_0..AndroidKey.KEYCODE_9 -> { typed = (typed + (code - AndroidKey.KEYCODE_0)).take(4); true }
+                    code in AndroidKey.KEYCODE_NUMPAD_0..AndroidKey.KEYCODE_NUMPAD_9 -> { typed = (typed + (code - AndroidKey.KEYCODE_NUMPAD_0)).take(4); true }
+                    code == AndroidKey.KEYCODE_ENTER || code == AndroidKey.KEYCODE_DPAD_CENTER || code == AndroidKey.KEYCODE_NUMPAD_ENTER ->
+                        if (typed.isNotEmpty()) { commitNumber(); true } else false
+                    code == AndroidKey.KEYCODE_LAST_CHANNEL -> { backToPrevious(); true }
+                    code == AndroidKey.KEYCODE_CHANNEL_UP -> { player?.seekToNextMediaItem(); true }
+                    code == AndroidKey.KEYCODE_CHANNEL_DOWN -> { player?.seekToPreviousMediaItem(); true }
+                    else -> false
+                }
+            },
+    ) {
         AndroidView(
             factory = {
                 PlayerView(it).apply {
@@ -394,7 +490,7 @@ fun PlayerScreen(vm: MainViewModel) {
             }
         }
 
-        AnimatedVisibility(showControls, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(showControls && !inPip, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
             val iconBtn = if (compact) 44.dp else 56.dp
             val icon = if (compact) 26.dp else 32.dp
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -411,6 +507,23 @@ fun PlayerScreen(vm: MainViewModel) {
                     Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
                         Text(channel.name, color = GoldLight, fontSize = if (compact) 16.sp else 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${vm.playingIndex + 1} / ${vm.queue.size} • ${channel.group}", color = Muted, fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val (cur, next) = vm.epg?.nowNext(channel, now) ?: (null to null)
+                        if (cur != null || next != null) {
+                            Text(
+                                buildString {
+                                    cur?.let { append("الآن: ${it.title}") }
+                                    next?.let { if (isNotEmpty()) append("  •  "); append("بعده ${hhmm(it.start)}: ${it.title}") }
+                                },
+                                color = GoldLight, fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                            cur?.let { pr ->
+                                LinearProgressIndicator(
+                                    progress = { ((now - pr.start).toFloat() / (pr.stop - pr.start).coerceAtLeast(1)).coerceIn(0f, 1f) },
+                                    modifier = Modifier.padding(top = 3.dp).fillMaxWidth(0.6f).height(2.dp),
+                                    color = Gold, trackColor = Gold.copy(alpha = 0.2f),
+                                )
+                            }
+                        }
                     }
                     val fav = channel.url in vm.favorites
                     IconButton(onClick = { vm.toggleFavorite(channel); interaction++ }, Modifier.size(iconBtn)) {
@@ -460,6 +573,19 @@ fun PlayerScreen(vm: MainViewModel) {
                         }
                         BigButton(Icons.Filled.SkipNext, "التالية", if (compact) 56.dp else 72.dp) { player?.seekToNextMediaItem(); interaction++ }
                     }
+                    Row(
+                        Modifier.align(Alignment.BottomCenter).padding(bottom = if (compact) 6.dp else 18.dp)
+                            .windowInsetsPadding(WindowInsets.safeDrawing),
+                        horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp),
+                    ) {
+                        PillButton(Icons.Filled.History, "القناة السابقة", compact) { backToPrevious() }
+                        PillButton(Icons.Filled.Dialpad, "رقم القناة", compact) { showKeypad = true; interaction++ }
+                        if (Build.VERSION.SDK_INT >= 26) {
+                            PillButton(Icons.Filled.PictureInPictureAlt, "صورة جوه صورة", compact) {
+                                (ctx.findActivity() as? MainActivity)?.enterPip()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -472,8 +598,36 @@ fun PlayerScreen(vm: MainViewModel) {
                 ) { showList = false },
             )
         }
+        // Channel number being typed (top-left, like a receiver), or a short note.
+        if (!inPip && (typed.isNotEmpty() || zapNote != null)) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Box(
+                    Modifier.align(AbsoluteAlignment.TopLeft).windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp)
+                        .background(Color(0xCC000000), RoundedCornerShape(12.dp))
+                        .border(1.5.dp, GoldBrush, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    if (typed.isNotEmpty()) {
+                        Text(typed, style = TextStyle(brush = shimmeringGold(200f), fontSize = if (compact) 30.sp else 44.sp,
+                            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace))
+                    } else {
+                        Text(zapNote ?: "", color = Cream, fontSize = 15.sp)
+                    }
+                }
+            }
+        }
+        if (showKeypad && !inPip) {
+            Keypad(
+                typed = typed,
+                compact = compact,
+                onDigit = { d -> typed = (typed + d).take(4) },
+                onOk = { commitNumber(); showKeypad = false },
+                onPrevious = { backToPrevious(); showKeypad = false },
+                onDismiss = { showKeypad = false; typed = "" },
+            )
+        }
         AnimatedVisibility(
-            showList,
+            showList && !inPip,
             enter = slideInHorizontally { -it } + fadeIn(),
             exit = slideOutHorizontally { -it } + fadeOut(),
             modifier = Modifier.align(AbsoluteAlignment.CenterLeft),
@@ -481,17 +635,10 @@ fun PlayerScreen(vm: MainViewModel) {
             ChannelPanel(
                 vm = vm,
                 compact = compact,
+                now = now,
                 onPick = { i ->
-                    val local = i - vm.windowStart
-                    val p = player
-                    if (p != null && local in 0 until p.mediaItemCount) {
-                        p.seekTo(local, C.TIME_UNSET)
-                        p.play()
-                    } else {
-                        vm.play(vm.queue, i) // outside the loaded window: reload around it
-                    }
+                    jump(i)
                     showList = false
-                    interaction++
                 },
             )
         }
@@ -499,7 +646,7 @@ fun PlayerScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun ChannelPanel(vm: MainViewModel, compact: Boolean, onPick: (Int) -> Unit) {
+private fun ChannelPanel(vm: MainViewModel, compact: Boolean, now: Long, onPick: (Int) -> Unit) {
     var query by remember { mutableStateOf("") }
     // (index in queue, channel) so picks from search results still map to the right channel.
     val shown by produceState(vm.queue.withIndex().toList(), vm.queue, query) {
@@ -574,11 +721,16 @@ private fun ChannelPanel(vm: MainViewModel, compact: Boolean, onPick: (Int) -> U
                         }
                     }
                     Spacer(Modifier.size(10.dp))
-                    Text(
-                        c.name, color = if (selected) GoldLight else Cream,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                        fontSize = if (compact) 13.sp else 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+                    Column {
+                        Text(
+                            c.name, color = if (selected) GoldLight else Cream,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = if (compact) 13.sp else 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        vm.epg?.nowNext(c, now)?.first?.let { pr ->
+                            Text(pr.title, color = Muted, fontSize = if (compact) 10.sp else 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                 }
             }
         }
@@ -650,6 +802,76 @@ private fun CastButton(modifier: Modifier = Modifier) {
         },
         modifier = modifier,
     )
+}
+
+private fun hhmm(t: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(t))
+
+@Composable
+private fun PillButton(icon: ImageVector, label: String, compact: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(Color(0xB3000000))
+            .border(1.dp, GoldBrush, RoundedCornerShape(50)).clickable(onClick = onClick)
+            .padding(horizontal = if (compact) 10.dp else 14.dp, vertical = if (compact) 6.dp else 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, label, tint = GoldLight, modifier = Modifier.size(if (compact) 18.dp else 22.dp))
+        if (!compact) {
+            Spacer(Modifier.size(6.dp))
+            Text(label, color = Cream, fontSize = 13.sp)
+        }
+    }
+}
+
+/** On-screen number pad for jumping to a channel number, like a receiver remote. */
+@Composable
+private fun Keypad(
+    typed: String, compact: Boolean,
+    onDigit: (Int) -> Unit, onOk: () -> Unit, onPrevious: () -> Unit, onDismiss: () -> Unit,
+) {
+    Box(
+        Modifier.fillMaxSize().background(Color(0x99000000)).clickable(
+            interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss,
+        ),
+        contentAlignment = Alignment.Center,
+    ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Column(
+                Modifier.background(Color(0xF2000000), RoundedCornerShape(20.dp))
+                    .border(1.5.dp, GoldBrush, RoundedCornerShape(20.dp))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+                    .padding(if (compact) 10.dp else 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    typed.ifEmpty { "---" },
+                    style = TextStyle(brush = shimmeringGold(200f), fontSize = if (compact) 26.sp else 34.sp,
+                        fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                val key = if (compact) 48.dp else 60.dp
+                listOf(listOf(1, 2, 3), listOf(4, 5, 6), listOf(7, 8, 9)).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                        row.forEach { d -> KeyButton(d.toString(), key) { onDigit(d) } }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                    KeyButton("↺", key, onPrevious)
+                    KeyButton("0", key) { onDigit(0) }
+                    KeyButton("OK", key, onOk)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeyButton(label: String, size: Dp, onClick: () -> Unit) {
+    Box(
+        Modifier.size(size).clip(CircleShape).background(InkHigh).border(1.dp, GoldBrush, CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = GoldLight, fontSize = if (label.length > 1) 16.sp else 22.sp, fontWeight = FontWeight.Bold)
+    }
 }
 
 @Composable
