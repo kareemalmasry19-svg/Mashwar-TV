@@ -2,6 +2,8 @@
 
 package com.mashwar.tv
 
+import androidx.compose.ui.graphics.RectangleShape
+
 import kotlinx.coroutines.withContext
 
 import kotlinx.coroutines.Dispatchers
@@ -513,7 +515,7 @@ private fun ChannelPanel(vm: MainViewModel, compact: Boolean, onPick: (Int) -> U
     Column(
         Modifier.fillMaxHeight().width(if (compact) 260.dp else 360.dp)
             .background(Brush.horizontalGradient(listOf(Color(0xFA050505), Color(0xF2121014))))
-            .border(1.dp, GoldBrush)
+            .border(1.dp, GoldBrush, RectangleShape)
             .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
         Text(
