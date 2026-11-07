@@ -79,12 +79,12 @@ object Xtream {
 
     /** Live channels as an M3U playlist (with the panel's own EPG link in the header). */
     suspend fun buildM3u(acc: XtreamAccount): String = withContext(Dispatchers.IO) {
-        val cats = HashMap<String, String>()
+        val cats = LinkedHashMap<String, String>() // panel order
         runCatching {
             val arr = JSONArray(get(api(acc, "get_live_categories")))
             for (i in 0 until arr.length()) arr.getJSONObject(i).let { cats[it.optString("category_id")] = it.optString("category_name") }
         }
-        val streams = JSONArray(get(api(acc, "get_live_streams")))
+        val streams = panelOrder(JSONArray(get(api(acc, "get_live_streams"))), cats)
         val ext = if (acc.hls) "m3u8" else "ts"
         val user = URLEncoder.encode(acc.user, "UTF-8")
         val pass = URLEncoder.encode(acc.pass, "UTF-8")
@@ -92,8 +92,7 @@ object Xtream {
         fun attr(s: String) = s.replace('"', '\'').replace('\n', ' ')
         buildString(streams.length() * 160) {
             append("#EXTM3U x-tvg-url=\"").append(epg).append("\"\n")
-            for (i in 0 until streams.length()) {
-                val o = streams.getJSONObject(i)
+            for (o in streams) {
                 val id = o.optString("stream_id")
                 if (id.isEmpty()) continue
                 val name = o.optString("name").trim().ifEmpty { "قناة $id" }
@@ -151,6 +150,17 @@ private fun fetch(url: String): String {
     }
 }
 
+/**
+ * The panel's own order: categories exactly as the panel lists them, and inside each category the
+ * items in the order the panel returns them. Items whose category is unknown go last. Nothing is filtered.
+ */
+internal fun panelOrder(items: JSONArray, categoriesInOrder: Map<String, String>): List<JSONObject> {
+    val rank = HashMap<String, Int>()
+    categoriesInOrder.keys.forEachIndexed { i, id -> rank[id] = i }
+    return (0 until items.length()).mapNotNull { items.optJSONObject(it) }
+        .sortedBy { rank[it.optString("category_id")] ?: Int.MAX_VALUE } // stable: keeps panel order inside a category
+}
+
 private fun categories(acc: XtreamAccount, action: String): Map<String, String> = runCatching {
     val arr = JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=$action"))
     (0 until arr.length()).associate { i -> arr.getJSONObject(i).let { it.optString("category_id") to it.optString("category_name") } }
@@ -160,9 +170,8 @@ private fun JSONObject.str(key: String) = optString(key).takeIf { it.isNotBlank(
 
 suspend fun Xtream.movies(acc: XtreamAccount): List<VodItem> = withContext(Dispatchers.IO) {
     val cats = categories(acc, "get_vod_categories")
-    val arr = JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=get_vod_streams"))
-    (0 until arr.length()).mapNotNull { i ->
-        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+    val arr = panelOrder(JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=get_vod_streams")), cats)
+    arr.mapNotNull { o ->
         val id = o.str("stream_id") ?: return@mapNotNull null
         VodItem(
             id, o.str("name") ?: "فيلم $id", o.str("stream_icon")?.takeIf { it.startsWith("http") },
@@ -174,9 +183,8 @@ suspend fun Xtream.movies(acc: XtreamAccount): List<VodItem> = withContext(Dispa
 
 suspend fun Xtream.series(acc: XtreamAccount): List<SeriesItem> = withContext(Dispatchers.IO) {
     val cats = categories(acc, "get_series_categories")
-    val arr = JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=get_series"))
-    (0 until arr.length()).mapNotNull { i ->
-        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+    val arr = panelOrder(JSONArray(fetch("${acc.server}/player_api.php?${acc.q()}&action=get_series")), cats)
+    arr.mapNotNull { o ->
         val id = o.str("series_id") ?: return@mapNotNull null
         SeriesItem(
             id, o.str("name") ?: "مسلسل $id", o.str("cover")?.takeIf { it.startsWith("http") },
