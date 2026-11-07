@@ -75,7 +75,7 @@ sleep 2
 screen xtream-dialog
 tap "إلغاء" nodump
 sleep 2
-tap "جرّب بقائمة تجريبية"
+tap "قنوات مجانية — مصر والعرب"
 sleep 6
 screen channels
 tap "فحص القنوات"
