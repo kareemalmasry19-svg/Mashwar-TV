@@ -90,7 +90,7 @@ object Xtream {
         val pass = URLEncoder.encode(acc.pass, "UTF-8")
         val epg = "${acc.server}/xmltv.php?username=$user&password=$pass"
         fun attr(s: String) = s.replace('"', '\'').replace('\n', ' ')
-        buildString(streams.length() * 160) {
+        buildString(streams.size * 160) {
             append("#EXTM3U x-tvg-url=\"").append(epg).append("\"\n")
             for (o in streams) {
                 val id = o.optString("stream_id")
