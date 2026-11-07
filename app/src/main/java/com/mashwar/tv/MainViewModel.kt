@@ -22,10 +22,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = Store(app)
 
     var playlists by mutableStateOf(store.playlists())
+        private set
 
     /** Playlist management lives on its own screen; home shows folders. */
     var showManage by mutableStateOf(false)
-        private set
     var current by mutableStateOf<Playlist?>(null)
         private set
     var channels by mutableStateOf<List<Channel>>(emptyList())
