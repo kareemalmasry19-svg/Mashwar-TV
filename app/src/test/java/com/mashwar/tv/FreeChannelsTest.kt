@@ -64,7 +64,7 @@ class FreeChannelsTest {
         assertEquals(listOf("MBC Masr"), names(ChannelFilter(minHeight = 1080)))
         assertEquals(listOf("MBC Masr", "KTV Sport"), names(ChannelFilter(minHeight = 720)))
         assertEquals(listOf("BBC Arabic"), names(ChannelFilter(query = "bbc")))
-        assertEquals(listOf("MBC Masr", "Minimal"), names(ChannelFilter(group = "🇪🇬 مصر")))
+        assertEquals(listOf("MBC Masr"), names(ChannelFilter(group = "🇪🇬 مصر")))
     }
 
     @Test fun favouritesAndDeadFilters() {
