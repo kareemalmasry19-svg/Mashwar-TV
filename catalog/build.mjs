@@ -79,6 +79,14 @@ for (const cc of ARAB_COUNTRIES) {
     (await tryGet(`${NEXUS}/epg/${cc}.xml.gz`, { gzip: true }));
   if (xml) parts.push(...filterXmltv(xml, ids, now - 3 * 3600e3, now + 36 * 3600e3));
 }
+// No per-country shards for our region: take the merged guide and keep only our channels.
+if (parts.length === 0) {
+  const xml = await tryGet(`${NEXUS}/epg/guide.xml.gz`, { gzip: true, timeoutMs: 180000 });
+  if (xml) {
+    console.log(`merged guide: ${(xml.length / 1e6).toFixed(1)} MB`);
+    parts.push(...filterXmltv(xml, ids, now - 3 * 3600e3, now + 36 * 3600e3));
+  }
+}
 const guide = `<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="AlmasryTV catalog">\n${parts.join("\n")}\n</tv>\n`;
 await fs.writeFile(path.join(OUT, "arab-epg.xml.gz"), zlib.gzipSync(guide, { level: 9 }));
 
