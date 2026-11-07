@@ -38,6 +38,33 @@ adb shell wm size
 adb shell am start -W -n com.mashwar.tv/.MainActivity
 sleep 6
 screen home
+tap "📡 قنوات مجانية — مصر والعرب"
+sleep 12
+screen free-channels
+tap "رياضة"
+sleep 3
+screen free-sports
+adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
+FREE=$(python3 - <<'PY'
+import re
+x = open("ui.xml", encoding="utf-8").read()
+nodes = re.findall(r'<node [^>]*>', x); seen = False
+for s in nodes:
+    if re.search(r'text="\d+ قناة"', s): seen = True; continue
+    if seen and 'clickable="true"' in s:
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', s); a, c, d, e = map(int, b.groups()); print((a + d) // 2, (c + e) // 2); break
+PY
+)
+echo "first free channel at $FREE"; [ -n "$FREE" ] && adb shell input tap $FREE
+sleep 15
+adb shell input keyevent KEYCODE_MEDIA_PAUSE
+sleep 2
+screen free-player
+adb shell input keyevent KEYCODE_BACK
+sleep 2
+adb shell input keyevent KEYCODE_BACK
+sleep 2
+screen back-home
 tap "قائمة جديدة"
 sleep 2
 tap "دخول Xtream"
