@@ -1,0 +1,40 @@
+name: Free channels catalog
+
+# Rebuilds the Egypt + Arab free-to-air catalogue (and trimmed EPG) from public indexes
+# and publishes it as release assets the app downloads (a few hundred KB instead of 25+ MB).
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["catalog/**", ".github/workflows/catalog.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: catalog
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Unit tests
+        run: node --test catalog/test/*.test.mjs
+      - name: Build catalog
+        run: node catalog/build.mjs catalog/out
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view catalog >/dev/null 2>&1 || \
+            gh release create catalog --title "Free channels catalog" --latest=false \
+              --notes "Built automatically every 6 hours. Publicly listed free-to-air streams for Egypt and Arab countries; status is the source's last scan, not a playback guarantee."
+          gh release upload catalog catalog/out/arab.json.gz catalog/out/arab-epg.xml.gz catalog/out/summary.json --clobber
