@@ -3,6 +3,9 @@ name: Smoke test (emulator)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -27,3 +30,10 @@ jobs:
           target: google_apis
           disable-animations: true
           script: sh ci/smoke.sh
+      - name: Upload screenshots
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view ci-screens >/dev/null 2>&1 || gh release create ci-screens --title "CI screenshots" --latest=false --notes "Emulator screenshots from the smoke test."
+          for f in home.png free.png; do [ -f "$f" ] && gh release upload ci-screens "$f" --clobber; done

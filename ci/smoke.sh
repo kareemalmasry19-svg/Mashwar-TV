@@ -41,9 +41,11 @@ sleep 6
 screen home
 sleep 10
 screen home-folders
+adb exec-out screencap -p > home.png
 tap "قنوات مجانية — مصر والعرب"
 sleep 6
 screen free-channels
+adb exec-out screencap -p > free.png
 tap "رياضة"
 sleep 3
 screen free-sports
