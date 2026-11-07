@@ -169,10 +169,17 @@ fun HomeScreen(vm: MainViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(24.dp))
+                    Button(onClick = { vm.addFreeCatalog() }) { Text("📡 قنوات مجانية — مصر والعرب") }
+                    Spacer(Modifier.height(8.dp))
                     OutlinedButton(onClick = { vm.addSample() }) { Text("جرّب بقائمة تجريبية") }
                 }
             } else {
                 LazyColumn(contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 96.dp)) {
+                    if (vm.playlists.none { it.source == FreeCatalog.SOURCE }) item {
+                        OutlinedButton(onClick = { vm.addFreeCatalog() }, Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("📡 ضيف القنوات المجانية — مصر والعرب")
+                        }
+                    }
                     items(vm.playlists, key = { it.id }) { p ->
                         Card(
                             Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable { vm.open(p) },
@@ -185,7 +192,8 @@ fun HomeScreen(vm: MainViewModel) {
                                 Column(Modifier.weight(1f)) {
                                     Text(p.name, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                                     Text(
-                                        XtreamAccount.decode(p.source)?.let { "Xtream • ${it.user} @ ${it.host}" }
+                                        (if (p.source == FreeCatalog.SOURCE) "قنوات مجانية • بتتحدّث كل 6 ساعات" else null)
+                                            ?: XtreamAccount.decode(p.source)?.let { "Xtream • ${it.user} @ ${it.host}" }
                                             ?: if (p.isUri) "ملف من الموبايل" else if (p.source == "sample") "روابط تجريبية" else p.source,
                                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -272,11 +280,20 @@ private fun AddPlaylistDialog(vm: MainViewModel, onDismiss: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = tab == 0, onClick = { tab = 0; err = null }, label = { Text("رابط / ملف M3U") })
                     FilterChip(selected = tab == 1, onClick = { tab = 1; err = null }, label = { Text("دخول Xtream") })
+                    FilterChip(selected = tab == 2, onClick = { tab = 2; err = null }, label = { Text("مجانية") })
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(name, { name = it }, label = { Text("الاسم (اختياري)") }, singleLine = true)
                 Spacer(Modifier.height(8.dp))
-                if (tab == 0) {
+                if (tab == 2) {
+                    Text(
+                        "قنوات مجانية مفتوحة لمصر والدول العربية، بتتجمّع من مصادر عامة وبتتحدّث لوحدها كل 6 ساعات، " +
+                            "ومعلّم على كل قناة هي شغالة ولا لأ في آخر فحص.",
+                        fontSize = 14.sp,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text("حالة القناة من آخر فحص للمصدر، ومش ضمان إنها هتشتغل في كل مكان ووقت.", fontSize = 12.sp, color = Muted)
+                } else if (tab == 0) {
                     OutlinedTextField(url, { url = it }, label = { Text("رابط M3U") }, singleLine = true)
                     Spacer(Modifier.height(12.dp))
                     OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }, Modifier.fillMaxWidth()) {
@@ -322,7 +339,9 @@ private fun AddPlaylistDialog(vm: MainViewModel, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            if (tab == 0) {
+            if (tab == 2) {
+                Button(onClick = { vm.addFreeCatalog(); onDismiss() }) { Text("ضيف القنوات المجانية") }
+            } else if (tab == 0) {
                 Button(enabled = url.isNotBlank(), onClick = { vm.addPlaylist(name, url, false); onDismiss() }) { Text("ضيف") }
             } else {
                 Button(
@@ -359,6 +378,12 @@ fun ChannelsScreen(vm: MainViewModel) {
     val groups = remember(vm.channels) { listOf(ALL, FAVS) + vm.channels.map { it.group }.distinct() }
     // Filtering thousands of channels on every keystroke janks the UI: do it off the main thread.
     var showDead by remember { mutableStateOf(false) }
+    // Extra filters, shown when the playlist carries categories / quality / scan status (e.g. free channels).
+    val rich = remember(vm.channels) { vm.channels.any { it.categories != null || it.status != null } }
+    var category by remember(vm.current?.id) { mutableStateOf<String?>(null) }
+    var language by remember(vm.current?.id) { mutableStateOf<String?>(null) }
+    var onlyWorking by remember(vm.current?.id) { mutableStateOf(true) }
+    var minHeight by remember(vm.current?.id) { mutableIntStateOf(0) }
     val now by produceState(System.currentTimeMillis()) {
         while (true) { delay(30_000); value = System.currentTimeMillis() }
     }
@@ -381,20 +406,19 @@ fun ChannelsScreen(vm: MainViewModel) {
             confirmButton = { TextButton(onClick = { vm.cancelScan() }) { Text("إيقاف") } },
         )
     }
-    val filtered by produceState(vm.channels, vm.channels, query, group, vm.favorites, vm.dead, showDead) {
+    val filtered by produceState(vm.channels, vm.channels, query, group, vm.favorites, vm.dead, showDead, category, language, onlyWorking, minHeight) {
         if (query.isNotBlank()) delay(150)
         val all = vm.channels
+        val f = ChannelFilter(
+            query = query,
+            group = group.takeIf { it != ALL && it != FAVS },
+            favoritesOnly = group == FAVS,
+            category = category, language = language,
+            onlyWorking = rich && onlyWorking, minHeight = minHeight,
+        )
         val favs = vm.favorites
         val dead = if (showDead) emptySet() else vm.dead
-        val q = query.trim()
-        value = withContext(Dispatchers.Default) {
-            if (group == ALL && q.isEmpty() && dead.isEmpty()) all
-            else all.filter { c ->
-                c.url !in dead &&
-                    (group == ALL || (group == FAVS && c.url in favs) || c.group == group) &&
-                    (q.isEmpty() || c.name.contains(q, ignoreCase = true))
-            }
-        }
+        value = withContext(Dispatchers.Default) { filterChannels(all, f, favs, dead) }
     }
 
     Scaffold(
@@ -449,6 +473,52 @@ fun ChannelsScreen(vm: MainViewModel) {
                     }
                 }
             }
+            if (rich) {
+                val cats = remember(vm.channels) {
+                    val present = vm.channels.flatMap { it.categories?.split(',').orEmpty() }.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                    FreeCatalog.CATEGORY_NAMES.keys.filter { it in present } + (present - FreeCatalog.CATEGORY_NAMES.keys)
+                }
+                val langs = remember(vm.channels) {
+                    vm.channels.flatMap { it.languages?.split(',').orEmpty() }.map { it.trim() }.filter { it.isNotEmpty() }
+                        .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(6)
+                }
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item { FilterChip(selected = category == null, onClick = { category = null }, label = { Text("كل الأنواع") }) }
+                    items(cats) { c ->
+                        FilterChip(
+                            selected = category == c, onClick = { category = if (category == c) null else c },
+                            label = { Text(FreeCatalog.CATEGORY_NAMES[c] ?: c) },
+                        )
+                    }
+                }
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        FilterChip(selected = onlyWorking, onClick = { onlyWorking = !onlyWorking }, label = { Text("✓ الشغالة بس") })
+                    }
+                    item {
+                        val label = when (minHeight) { 0 -> "كل الجودات"; 720 -> "HD وأعلى"; else -> "Full HD" }
+                        FilterChip(
+                            selected = minHeight > 0,
+                            onClick = { minHeight = when (minHeight) { 0 -> 720; 720 -> 1080; else -> 0 } },
+                            label = { Text(label) },
+                        )
+                    }
+                    if (langs.size > 1) {
+                        items(langs) { l ->
+                            FilterChip(
+                                selected = language == l, onClick = { language = if (language == l) null else l },
+                                label = { Text(FreeCatalog.LANGUAGE_NAMES[l] ?: l) },
+                            )
+                        }
+                    }
+                }
+            }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${filtered.size} قناة", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 if (vm.epgLoading) Text("بيحمّل دليل البرامج…", color = Muted, fontSize = 12.sp)
@@ -498,6 +568,9 @@ private fun ChannelRow(
             Text(c.name, fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             when {
                 dead -> Text("مش شغالة في آخر فحص", fontSize = 13.sp, color = MaterialTheme.colorScheme.error, maxLines = 1)
+                c.status == "blocked" -> Text("ممكن تكون مقفولة في بعض الدول", fontSize = 13.sp, color = Muted, maxLines = 1)
+                c.status == "timeout" -> Text("السيرفر بطيء في الرد", fontSize = 13.sp, color = Muted, maxLines = 1)
+                c.status == "offline" || c.status == "error" -> Text("مش شغالة في آخر فحص للمصدر", fontSize = 13.sp, color = MaterialTheme.colorScheme.error, maxLines = 1)
                 now != null -> {
                     Text(now.title, fontSize = 13.sp, color = GoldLight, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     LinearProgressIndicator(

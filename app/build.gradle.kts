@@ -12,8 +12,8 @@ android {
         applicationId = "com.mashwar.tv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.9.1"
+        versionCode = 22
+        versionName = "0.10.0"
     }
 
     // One fixed signing key for every build (CI included), so new versions
@@ -26,6 +26,8 @@ android {
             keyPassword = "android"
         }
     }
+
+    testOptions { unitTests.isReturnDefaultValues = true }
 
     buildTypes {
         release {
@@ -50,6 +52,8 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.core:core-ktx:1.15.0")

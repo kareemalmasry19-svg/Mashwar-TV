@@ -17,7 +17,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      - run: chmod +x gradlew && ./gradlew assembleRelease --stacktrace
+      - run: chmod +x gradlew && ./gradlew testReleaseUnitTest assembleRelease --stacktrace
       - run: cp app/build/outputs/apk/release/app-release.apk KenueTV.apk
       - uses: actions/upload-artifact@v4
         with:

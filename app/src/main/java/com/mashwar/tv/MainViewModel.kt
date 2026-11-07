@@ -59,6 +59,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+    /** Adds (or opens, if already added) the built-in free channels for Egypt and Arab countries. */
+    fun addFreeCatalog() = viewModelScope.launch {
+        playlists.firstOrNull { it.source == FreeCatalog.SOURCE }?.let { open(it); return@launch }
+        loading = true
+        try {
+            val text = FreeCatalog.text(getApplication())
+            savePlaylist("قنوات مجانية — مصر والعرب", FreeCatalog.SOURCE, false, text)
+        } catch (e: Exception) {
+            message = e.message ?: "مقدرتش أحمّل القنوات المجانية"
+        } finally {
+            loading = false
+        }
+    }
+
     fun addPlaylist(name: String, source: String, isUri: Boolean) = viewModelScope.launch {
         loading = true
         try {
@@ -102,6 +116,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (pl.epgUrl == null) M3uParser.epgUrlOf(raw)?.let { url -> pl = p.copy(epgUrl = url); replacePlaylist(pl) }
         current = pl
         dead = store.dead(pl.id)
+        // Free catalogue: refresh quietly in the background when the 6-hour copy is stale.
+        if (pl.source == FreeCatalog.SOURCE && !FreeCatalog.cacheIsFresh(getApplication())) {
+            viewModelScope.launch {
+                runCatching { FreeCatalog.text(getApplication(), force = true) }.onSuccess { text ->
+                    val fresh = withContext(Dispatchers.Default) { M3uParser.parse(text) }
+                    if (fresh.isNotEmpty() && current?.id == pl.id) {
+                        withContext(Dispatchers.IO) { store.saveRaw(pl.id, text) }
+                        channels = fresh
+                    }
+                }
+            }
+        }
         loading = false
         loadEpg(pl)
     }

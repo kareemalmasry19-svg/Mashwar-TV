@@ -21,6 +21,12 @@ data class Channel(
     val userAgent: String? = null,
     val referrer: String? = null,
     val tvgId: String? = null,
+    /** Extra metadata (free catalogue / rich M3U): ISO country, language codes, categories, best quality, last scan. */
+    val country: String? = null,
+    val languages: String? = null,
+    val categories: String? = null,
+    val quality: String? = null,
+    val status: String? = null,
 )
 
 data class Playlist(
@@ -44,9 +50,15 @@ object M3uParser {
         var ua: String? = null
         var ref: String? = null
         var tvgId: String? = null
+        var country: String? = null
+        var langs: String? = null
+        var cats: String? = null
+        var quality: String? = null
+        var status: String? = null
 
         fun reset() {
             name = null; logo = null; group = GROUP_DEFAULT; ua = null; ref = null; tvgId = null
+            country = null; langs = null; cats = null; quality = null; status = null
         }
 
         text.lineSequence().forEach { raw ->
@@ -58,6 +70,11 @@ object M3uParser {
                         .associate { it.groupValues[1].lowercase() to it.groupValues[2] }
                     logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }
                     tvgId = attrs["tvg-id"]?.trim()?.takeIf { it.isNotBlank() }
+                    country = attrs["tvg-country"]?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
+                    langs = attrs["tvg-language"]?.trim()?.takeIf { it.isNotBlank() }
+                    cats = attrs["x-categories"]?.trim()?.takeIf { it.isNotBlank() }
+                    quality = attrs["x-quality"]?.trim()?.takeIf { it.isNotBlank() }
+                    status = attrs["x-status"]?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
                     group = attrs["group-title"]?.takeIf { it.isNotBlank() } ?: GROUP_DEFAULT
                     val stripped = attrRegex.replace(line, "")
                     name = stripped.substringAfter(",", "").trim()
@@ -87,7 +104,9 @@ object M3uParser {
                         }
                     }
                     val fallback = url.substringAfterLast('/').substringBefore('?').ifBlank { "قناة" }
-                    out += Channel(name ?: fallback, url, logo, group, ua, ref, tvgId)
+                    if (url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("rtsp://", true) || url.startsWith("rtmp://", true)) {
+                        out += Channel(name ?: fallback, url, logo, group, ua, ref, tvgId, country, langs, cats, quality, status)
+                    }
                     reset()
                 }
             }
@@ -161,6 +180,7 @@ class Store(context: Context) {
 suspend fun fetchPlaylistText(context: Context, source: String, isUri: Boolean): String =
     withContext(Dispatchers.IO) {
         XtreamAccount.decode(source)?.let { return@withContext Xtream.buildM3u(it) }
+        if (source == FreeCatalog.SOURCE) return@withContext FreeCatalog.text(context, force = true)
         if (isUri) {
             context.contentResolver.openInputStream(Uri.parse(source))
                 ?.bufferedReader()?.use { it.readText() }
@@ -203,3 +223,35 @@ https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tear
 #EXTINF:-1 group-title="MP4",Big Buck Bunny (MP4)
 https://storage.googleapis.com/exoplayer-test-media-0/BigBuckBunny_320x180.mp4
 """.trimIndent()
+
+/** Height in lines from a quality label ("1080p", "720i", "4K") or 0 when unknown. */
+fun qualityHeight(q: String?): Int {
+    val t = q?.lowercase() ?: return 0
+    if ("4k" in t || "2160" in t) return 2160
+    return Regex("(\\d{3,4})").find(t)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+}
+
+/** All channel-list filters in one place (unit-tested). */
+data class ChannelFilter(
+    val query: String = "",
+    val group: String? = null,          // null = all groups
+    val favoritesOnly: Boolean = false,
+    val category: String? = null,
+    val language: String? = null,
+    val onlyWorking: Boolean = false,   // last scan said "online" (or no status known)
+    val minHeight: Int = 0,
+)
+
+fun filterChannels(all: List<Channel>, f: ChannelFilter, favorites: Set<String>, dead: Set<String>): List<Channel> {
+    val q = f.query.trim()
+    return all.filter { c ->
+        c.url !in dead &&
+            (f.group == null || c.group == f.group) &&
+            (!f.favoritesOnly || c.url in favorites) &&
+            (f.category == null || c.categories?.split(',')?.any { it.trim() == f.category } == true) &&
+            (f.language == null || c.languages?.split(',')?.any { it.trim() == f.language } == true) &&
+            (!f.onlyWorking || c.status == null || c.status == "online") &&
+            (f.minHeight == 0 || qualityHeight(c.quality) >= f.minHeight) &&
+            (q.isEmpty() || c.name.contains(q, ignoreCase = true))
+    }
+}
