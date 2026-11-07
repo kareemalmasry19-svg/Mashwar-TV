@@ -163,6 +163,9 @@ class Store(context: Context) {
         get() = prefs.getInt("max_quality", 0)
         set(value) { prefs.edit().putInt("max_quality", value).apply() }
 
+    fun flag(key: String): Boolean = prefs.getBoolean("flag_$key", false)
+    fun setFlag(key: String) { prefs.edit().putBoolean("flag_$key", true).apply() }
+
     /** Channels the last scan found not working, per playlist. */
     fun dead(playlistId: String): Set<String> = prefs.getStringSet("dead_$playlistId", emptySet())!!.toSet()
     fun saveDead(playlistId: String, urls: Set<String>) { prefs.edit().putStringSet("dead_$playlistId", urls).apply() }

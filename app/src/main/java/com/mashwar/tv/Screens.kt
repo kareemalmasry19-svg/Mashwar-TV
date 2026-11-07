@@ -1,5 +1,11 @@
 package com.mashwar.tv
 
+import androidx.compose.material.icons.filled.Share
+
+import androidx.compose.ui.text.style.LineHeightStyle
+
+import androidx.compose.ui.text.PlatformTextStyle
+
 import androidx.compose.ui.text.font.Font
 
 import androidx.compose.ui.text.withStyle
@@ -119,7 +125,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 
 @Composable
-private fun MessageToasts(vm: MainViewModel) {
+internal fun MessageToasts(vm: MainViewModel) {
     val ctx = LocalContext.current
     LaunchedEffect(vm.message) {
         vm.message?.let {
@@ -133,15 +139,25 @@ private fun MessageToasts(vm: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: MainViewModel) {
+fun ManagePlaylistsScreen(vm: MainViewModel) {
     MessageToasts(vm)
+    BackHandler { vm.showManage = false }
+    val ctx = LocalContext.current
     var showAdd by remember { mutableStateOf(false) }
     var toDelete by remember { mutableStateOf<Playlist?>(null) }
     var toRename by remember { mutableStateOf<Playlist?>(null) }
 
     Scaffold(
         topBar = {
-            CenterAlignedTopAppBar(title = { BrandTitle() })
+            TopAppBar(
+                title = { Text("إدارة القوائم") },
+                navigationIcon = { IconButton(onClick = { vm.showManage = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "رجوع") } },
+                actions = {
+                    IconButton(onClick = { ShareApp.share(ctx, vm.playlists) { vm.message = it } }) {
+                        Icon(Icons.Filled.Share, "شارك التطبيق مع القوايم", tint = Gold)
+                    }
+                },
+            )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -251,7 +267,7 @@ fun HomeScreen(vm: MainViewModel) {
 }
 
 @Composable
-private fun AddPlaylistDialog(vm: MainViewModel, onDismiss: () -> Unit) {
+internal fun AddPlaylistDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     var tab by remember { mutableIntStateOf(0) } // 0 = M3U, 1 = Xtream
     var name by remember { mutableStateOf("") }
@@ -604,6 +620,13 @@ fun BrandTitle(compact: Boolean = false) {
             append(" ")
             withStyle(SpanStyle(fontFamily = CinzelFont, fontSize = size * 0.72f, letterSpacing = 2.sp)) { append("TV") }
         },
-        style = TextStyle(brush = shimmeringGold(), fontWeight = FontWeight.Bold),
+        // The calligraphy rises above a normal line: give it room so the top isn't clipped.
+        style = TextStyle(
+            brush = shimmeringGold(), fontWeight = FontWeight.Bold,
+            lineHeight = size * 1.7f,
+            platformStyle = PlatformTextStyle(includeFontPadding = true),
+            lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Bottom, LineHeightStyle.Trim.None),
+        ),
+        modifier = Modifier.padding(top = if (compact) 4.dp else 10.dp),
     )
 }

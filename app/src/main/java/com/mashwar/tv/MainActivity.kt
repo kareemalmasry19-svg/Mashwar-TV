@@ -5,7 +5,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.app.PictureInPictureParams
 import android.os.Build
+import android.content.Intent
 import android.os.Bundle
+import androidx.activity.viewModels
 import android.util.Rational
 import androidx.lifecycle.Lifecycle
 import android.widget.Toast
@@ -42,6 +44,22 @@ import java.io.File
 
 // FragmentActivity (not plain ComponentActivity): the Cast button opens its device picker as a fragment dialog.
 class MainActivity : FragmentActivity() {
+    private val vm: MainViewModel by viewModels()
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleOpenedFile(intent)
+    }
+
+    /** A playlists file or M3U opened from WhatsApp / Files → import it. */
+    private fun handleOpenedFile(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        if (uri.scheme == "content" || uri.scheme == "file") vm.importFromUri(uri.toString())
+        else if (uri.scheme == "http" || uri.scheme == "https") vm.addPlaylist("", uri.toString(), false)
+        intent.action = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         CrashLog.install(this)
         super.onCreate(savedInstanceState)
@@ -62,7 +80,8 @@ class MainActivity : FragmentActivity() {
                 PipState.dismissed++
             }
         }
-        setContent { App() }
+        handleOpenedFile(intent)
+        setContent { App(vm) }
     }
 
     /** Home / recents while watching → keep watching in a small floating window. */
@@ -116,6 +135,7 @@ fun App(vm: MainViewModel = viewModel()) {
                     vm.nowPlaying != null -> PlayerScreen(vm)
                     vm.seriesDetail != null -> SeriesScreen(vm, vm.seriesDetail!!)
                     vm.current != null -> ChannelsScreen(vm)
+                    vm.showManage -> ManagePlaylistsScreen(vm)
                     else -> HomeScreen(vm)
                 }
             }

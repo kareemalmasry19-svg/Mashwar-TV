@@ -22,6 +22,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = Store(app)
 
     var playlists by mutableStateOf(store.playlists())
+
+    /** Playlist management lives on its own screen; home shows folders. */
+    var showManage by mutableStateOf(false)
         private set
     var current by mutableStateOf<Playlist?>(null)
         private set
@@ -58,6 +61,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 loading = false
             }
         }
+
+    init {
+        // First launch (including a friend who just installed the shared app): free channels are ready right away.
+        if (playlists.none { it.source == FreeCatalog.SOURCE } && !store.flag("free_auto_added")) {
+            store.setFlag("free_auto_added")
+            viewModelScope.launch { addFreeCatalogQuietly() }
+        }
+    }
+
+    private suspend fun addFreeCatalogQuietly() {
+        runCatching { FreeCatalog.text(getApplication()) }.onSuccess { text ->
+            val parsed = withContext(Dispatchers.Default) { M3uParser.parse(text) }
+            if (parsed.isEmpty() || playlists.any { it.source == FreeCatalog.SOURCE }) return
+            val p = Playlist(UUID.randomUUID().toString(), "قنوات مجانية — مصر والعرب", FreeCatalog.SOURCE, false, FreeCatalog.EPG_URL)
+            withContext(Dispatchers.IO) { store.saveRaw(p.id, text) }
+            playlists = listOf(p) + playlists
+            store.savePlaylists(playlists)
+        }
+    }
+
+    /** Playlists someone shared with the app (see ShareApp). Returns how many were added. */
+    fun importPack(json: String) = viewModelScope.launch {
+        val items = runCatching { ShareApp.readPack(json) }.getOrElse { message = "الملف ده مش ملف قوائم المصري TV"; return@launch }
+        var added = 0
+        for (item in items) {
+            if (playlists.any { it.name == item.name && (it.source == item.url || item.url == null) }) continue
+            val text = item.text ?: item.url?.let { url ->
+                runCatching { fetchPlaylistText(getApplication(), url, false) }.getOrNull()
+            } ?: continue
+            val parsed = withContext(Dispatchers.Default) { M3uParser.parse(text) }
+            if (parsed.isEmpty()) continue
+            val p = Playlist(UUID.randomUUID().toString(), item.name, item.url ?: "shared", false,
+                item.epgUrl ?: M3uParser.epgUrlOf(text))
+            withContext(Dispatchers.IO) { store.saveRaw(p.id, text) }
+            playlists = playlists + p
+            store.savePlaylists(playlists)
+            added++
+        }
+        message = if (added > 0) "اتضافت $added قائمة ✓" else "القوايم دي موجودة عندك أو مش شغالة"
+    }
+
+    /** A file opened with the app (WhatsApp, Files…): our shared pack, or a plain M3U. */
+    fun importFromUri(uri: String) = viewModelScope.launch {
+        val text = runCatching { fetchPlaylistText(getApplication(), uri, true) }.getOrElse {
+            message = "مقدرتش أفتح الملف"; return@launch
+        }
+        if (ShareApp.isPack(text)) importPack(text) else savePlaylist("", uri, true, text)
+    }
 
     /** Adds (or opens, if already added) the built-in free channels for Egypt and Arab countries. */
     fun addFreeCatalog() = viewModelScope.launch {

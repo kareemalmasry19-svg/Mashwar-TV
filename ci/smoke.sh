@@ -13,7 +13,8 @@ tap() {
   fi
   B=$(python3 - "$1" <<'PY'
 import re, sys
-t = sys.argv[1]; x = open("ui.xml", encoding="utf-8").read()
+import html
+t = sys.argv[1]; x = html.unescape(open("ui.xml", encoding="utf-8").read())
 for n in re.finditer(r'<node [^>]*>', x):
     s = n.group(0)
     sub = t[1:] if t.startswith("~") else None
@@ -38,8 +39,10 @@ adb shell wm size
 adb shell am start -W -n com.mashwar.tv/.MainActivity
 sleep 6
 screen home
-tap "📡 قنوات مجانية — مصر والعرب"
-sleep 12
+sleep 10
+screen home-folders
+tap "قنوات مجانية — مصر والعرب"
+sleep 6
 screen free-channels
 tap "رياضة"
 sleep 3
