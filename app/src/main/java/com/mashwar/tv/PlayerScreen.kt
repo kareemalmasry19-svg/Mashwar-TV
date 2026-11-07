@@ -2,6 +2,10 @@
 
 package com.mashwar.tv
 
+import androidx.compose.ui.text.input.KeyboardType
+
+import androidx.compose.foundation.text.KeyboardOptions
+
 import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.foundation.rememberScrollState
@@ -907,6 +911,10 @@ private fun TracksDialog(tracks: Tracks, player: Player?, onDismiss: () -> Unit)
 private fun TvPickerDialog(onDismiss: () -> Unit, onPick: (DlnaDevice) -> Unit) {
     val ctx = LocalContext.current
     var scan by remember { mutableStateOf<DlnaCast.Scan?>(null) }
+    var ipText by remember { mutableStateOf("") }
+    var ipError by remember { mutableStateOf<String?>(null) }
+    var ipBusy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     var round by remember { mutableIntStateOf(0) }
     LaunchedEffect(round) {
         scan = null
@@ -946,6 +954,35 @@ private fun TvPickerDialog(onDismiss: () -> Unit, onPick: (DlnaDevice) -> Unit) 
                             (if (r.others.isNotEmpty()) ":\n" + r.others.take(6).joinToString("\n") { "• $it" } else ".") +
                             "\n\nلو شاشتك في القائمة دي، فعّل في الشاشة: إدارة الأجهزة الخارجية ▸ مدير اتصال الأجهزة."
                     )
+                }
+                if (scan != null) {
+                    Spacer(Modifier.height(14.dp))
+                    HorizontalDivider(color = Gold.copy(alpha = 0.3f))
+                    Spacer(Modifier.height(10.dp))
+                    Text("أو وصّل بـ IP الشاشة", color = Gold, fontWeight = FontWeight.Bold)
+                    Text("في سامسونج: الإعدادات ▸ عام ▸ الشبكة ▸ حالة الشبكة ▸ إعدادات IP", fontSize = 12.sp, color = Muted)
+                    Spacer(Modifier.height(6.dp))
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        OutlinedTextField(
+                            ipText, { ipText = it; ipError = null }, singleLine = true,
+                            placeholder = { Text("192.168.1.20") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    ipError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(
+                        enabled = ipText.isNotBlank() && !ipBusy,
+                        onClick = {
+                            ipBusy = true
+                            scope.launch {
+                                val d = DlnaCast.probeIp(ipText)
+                                ipBusy = false
+                                if (d != null) onPick(d) else ipError = "الشاشة دي مردّتش. اتأكد إنها شغالة، وإن IP صح، ومن إعداد مدير اتصال الأجهزة."
+                            }
+                        },
+                    ) { Text(if (ipBusy) "بجرّب…" else "وصّل") }
                 }
             }
         },

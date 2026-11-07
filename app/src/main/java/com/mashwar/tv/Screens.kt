@@ -416,7 +416,11 @@ fun ChannelsScreen(vm: MainViewModel) {
                         modifier = Modifier.fillMaxWidth(), color = Gold, trackColor = Gold.copy(alpha = 0.2f),
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text("القنوات اللي مش شغالة هتتخفي من القائمة.", fontSize = 13.sp, color = Muted)
+                    Text("بتتخفي بس القنوات اللي واقعة أكيد. اللي السيرفر مارضيش يرد عليها بتفضل ظاهرة.", fontSize = 13.sp, color = Muted)
+                    if (vm.xtream != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Text("لو نفس الحساب شغال على شاشة تانية دلوقتي، وقّفه الأول عشان النتيجة تبقى صح.", fontSize = 13.sp, color = GoldLight)
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = { vm.cancelScan() }) { Text("إيقاف") } },

@@ -63,6 +63,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     init {
+        // The old scanner was too strict (busy accounts / slow servers counted as dead): forget its results once.
+        if (!store.flag("scan_v2")) {
+            playlists.forEach { store.saveDead(it.id, emptySet()) }
+            store.setFlag("scan_v2")
+        }
         // First launch (including a friend who just installed the shared app): free channels are ready right away.
         if (playlists.none { it.source == FreeCatalog.SOURCE } && !store.flag("free_auto_added")) {
             store.setFlag("free_auto_added")
@@ -264,6 +269,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (list.isEmpty() || scanJob?.isActive == true) return
         scanJob = viewModelScope.launch {
             val bad = ConcurrentHashMap.newKeySet<String>()
+            val unsure = AtomicInteger()
             val done = AtomicInteger()
             scanProgress = 0 to list.size
             // Xtream subscriptions usually allow only 1–2 streams at once: probing many in parallel gets
@@ -273,7 +279,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 list.forEach { c ->
                     launch {
                         gate.withPermit {
-                            if (!ChannelScanner.isAlive(c)) bad += c.url
+                            when (ChannelScanner.probe(c)) {
+                                ChannelScanner.Result.DEAD -> bad += c.url
+                                ChannelScanner.Result.UNSURE -> unsure.incrementAndGet()
+                                ChannelScanner.Result.ALIVE -> Unit
+                            }
                             val d = done.incrementAndGet()
                             if (d % 4 == 0 || d == list.size) scanProgress = d to list.size
                         }
@@ -283,7 +293,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             dead = bad.toSet()
             store.saveDead(p.id, dead)
             scanProgress = null
-            message = if (dead.isEmpty()) "كل القنوات شغالة ✓" else "لقيت ${dead.size} قناة مش شغالة واتخفت"
+            val u = unsure.get()
+            message = (if (dead.isEmpty()) "مفيش قنوات واقعة ✓" else "لقيت ${dead.size} قناة واقعة فعلًا واتخفت") +
+                (if (u > 0) " • $u قناة السيرفر مارضيش يرد عليها (سبتها ظاهرة)" else "")
         }
     }
 

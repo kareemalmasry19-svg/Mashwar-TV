@@ -113,6 +113,28 @@ object DlnaCast {
         Scan(devices, wifi = true, responders = responders.size, others = others)
     }
 
+    /**
+     * Connect to a TV by its IP address, for networks where discovery is blocked.
+     * Tries the description pages TVs usually serve (Samsung :9197/dmr first).
+     */
+    suspend fun probeIp(ipInput: String): DlnaDevice? = withContext(Dispatchers.IO) {
+        val ip = ipInput.trim().removePrefix("http://").substringBefore('/').substringBefore(':')
+        if (ip.isEmpty()) return@withContext null
+        val candidates = listOf(
+            "http://$ip:9197/dmr", "http://$ip:7676/smp_3_", "http://$ip:7676/smp_15_", "http://$ip:7676/smp_25_",
+            "http://$ip:1900/description.xml", "http://$ip:49152/description.xml", "http://$ip:49153/description.xml",
+            "http://$ip:8080/description.xml", "http://$ip:1400/xml/device_description.xml",
+        )
+        val quick = http.newBuilder().connectTimeout(2, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).build()
+        for (url in candidates) {
+            val xml = runCatching {
+                quick.newCall(Request.Builder().url(url).build()).execute().use { if (it.isSuccessful) it.body?.string() else null }
+            }.getOrNull() ?: continue
+            describe(url, xml)?.let { return@withContext it }
+        }
+        null
+    }
+
     /** IPv4 address of the phone on the current Wi-Fi network, or null when not on Wi-Fi. */
     private fun wifiAddress(ctx: Context): InetAddress? {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
