@@ -70,6 +70,8 @@ const catalog = {
   counts, channels,
 };
 await fs.writeFile(path.join(OUT, "arab.json.gz"), zlib.gzipSync(JSON.stringify(catalog), { level: 9 }));
+// Plain copy for the Samsung TV app (its 2018 browser cannot unzip).
+await fs.writeFile(path.join(OUT, "arab.json"), JSON.stringify(catalog));
 
 // Programme guide: per-country XMLTV shards, trimmed to our channels and the next ~36 hours.
 const ids = new Set(channels.map((c) => c.id));

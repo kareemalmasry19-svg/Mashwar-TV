@@ -37,4 +37,4 @@ jobs:
           gh release view catalog >/dev/null 2>&1 || \
             gh release create catalog --title "Free channels catalog" --latest=false \
               --notes "Built automatically every 6 hours. Publicly listed free-to-air streams for Egypt and Arab countries; status is the source's last scan, not a playback guarantee."
-          gh release upload catalog catalog/out/arab.json.gz catalog/out/arab-epg.xml.gz catalog/out/summary.json --clobber
+          gh release upload catalog catalog/out/arab.json.gz catalog/out/arab.json catalog/out/arab-epg.xml.gz catalog/out/summary.json --clobber
