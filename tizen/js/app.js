@@ -451,6 +451,10 @@
           AV.setDisplayRect(0, 0, 1920, 1080);
           try { AV.setDisplayMethod('PLAYER_DISPLAY_MODE_LETTER_BOX'); } catch (e) { /* older firmware */ }
           if (ua) { try { AV.setStreamingProperty('USER_AGENT', ua); } catch (e) { /* not supported */ } }
+          // Start quickly (3 s), but refill more (8 s) after a stall so a shaky line doesn't stutter again at once.
+          try { AV.setBufferingParam('PLAYER_BUFFER_FOR_PLAY', 'PLAYER_BUFFER_SIZE_IN_SECOND', 3); } catch (e) { /* older firmware */ }
+          try { AV.setBufferingParam('PLAYER_BUFFER_FOR_RESUME', 'PLAYER_BUFFER_SIZE_IN_SECOND', 8); } catch (e) { /* older firmware */ }
+          try { AV.setTimeoutForBuffering(15); } catch (e) { /* older firmware */ }
           AV.setListener({
             onbufferingstart: function () { P.buffering = true; renderOsdState(); },
             onbufferingcomplete: function () { P.buffering = false; renderOsdState(); },
@@ -501,16 +505,61 @@
     show('player', '<div id="osd"></div><div id="zapbox"></div><div id="panelbox"></div><div id="msg"></div>', { back: closePlayer, key: playerKey });
     startItem(i);
   }
+  // ---- stability: quiet auto-reconnect, .ts <-> .m3u8 fallback, stall watchdog
+  var MAX_RETRIES = 4;
+  /** The other container for Xtream live links (/live/u/p/id.ts <-> .m3u8); null when there isn't one. */
+  function altUrl(url) {
+    if (!/\/live\/[^/]+\/[^/]+\/\d+\.(ts|m3u8)(\?|$)/.test(url)) return null;
+    return /\.ts(\?|$)/.test(url) ? url.replace(/\.ts(\?|$)/, '.m3u8$1') : url.replace(/\.m3u8(\?|$)/, '.ts$1');
+  }
   function startItem(i) {
     if (!P.list.length) return;
     P.i = (i + P.list.length) % P.list.length;
+    P.retries = 0; P.useAlt = false;
+    openCurrent(P.opts.vod ? Number(load('pos', {})[P.list[P.i].url] || 0) : 0);
+  }
+  /** (Re)opens the current item. Callbacks from an older attempt are ignored via the session token. */
+  function openCurrent(resume) {
     var ch = P.list[P.i];
-    P.error = null; P.buffering = true; P.epg = null;
-    var resume = P.opts.vod ? Number(load('pos', {})[ch.url] || 0) : 0;
-    engine.open(ch.url, ch.ua, resume, function () { P.buffering = false; renderOsdState(); },
-      function (e) { P.error = e; P.buffering = false; renderOsdState(); showOsd(); },
-      function () { if (P.opts.series && P.i < P.list.length - 1) startItem(P.i + 1); else if (P.opts.vod) { savePos(true); closePlayer(); } });
-    if (P.opts.live && P.opts.p && P.opts.p.type === 'xtream' && ch.id) {
+    var token = P.session = (P.session || 0) + 1;
+    var alt = P.useAlt && altUrl(ch.url);
+    P.error = null; P.buffering = true; P.epg = P.epg && P.epgFor === ch ? P.epg : null;
+    P.stall = 0; P.lastT = -1;
+    renderOsdState();
+    engine.open(alt || ch.url, ch.ua, resume,
+      function () { if (token !== P.session) return; P.buffering = false; renderOsdState(); },
+      function (e) { if (token === P.session) failed(e); },
+      function () { if (token !== P.session) return; if (P.opts.series && P.i < P.list.length - 1) startItem(P.i + 1); else if (P.opts.vod) { savePos(true); closePlayer(); } });
+    clearInterval(P.watch);
+    P.watch = setInterval(watchdog, 2000);
+    afterOpen(ch);
+  }
+  /** Playback failed or stalled: retry quietly a few times, switching container once, before showing the error. */
+  function failed(e) {
+    if (P.retries < MAX_RETRIES) {
+      P.retries++;
+      if (P.retries === 2 && altUrl(P.list[P.i].url)) P.useAlt = !P.useAlt;
+      var pos = P.opts.vod ? engine.time() : 0;
+      P.error = null; P.buffering = true; P.reconnecting = true; renderOsdState();
+      clearTimeout(P.retryTimer);
+      P.retryTimer = setTimeout(function () { P.reconnecting = false; openCurrent(pos); }, 1000 * P.retries);
+      return;
+    }
+    clearInterval(P.watch);
+    P.error = e; P.buffering = false; P.reconnecting = false; renderOsdState(); showOsd();
+  }
+  /** Every 2 s: if the picture hasn't moved for 20 s (stuck buffering, frozen stream), reconnect. */
+  function watchdog() {
+    if (P.error || P.reconnecting || !P.list.length) return;
+    var t = engine.time();
+    if (AV) { try { if (AV.getState() === 'PAUSED') { P.stall = 0; return; } } catch (e) {} } else if (video.paused && !P.buffering) { P.stall = 0; return; }
+    if (t !== P.lastT) { P.lastT = t; P.stall = 0; if (t > 0 && !P.buffering) P.retries = 0; return; }
+    P.stall += 2;
+    if (P.stall >= 20) { P.stall = 0; failed('STALLED'); }
+  }
+  function afterOpen(ch) {
+    if (P.opts.live && P.opts.p && P.opts.p.type === 'xtream' && ch.id && P.epgFor !== ch) {
+      P.epgFor = ch;
       X.shortEpg(P.opts.p, ch.id).then(function (list) { if (P.list[P.i] === ch) { P.epg = list; renderOsd(); } }).catch(function () {});
     }
     clearInterval(P.saveTimer);
@@ -524,7 +573,8 @@
   }
   function closePlayer() {
     if (P.opts.vod) savePos(false);
-    clearInterval(P.saveTimer); clearTimeout(P.osdTimer);
+    clearInterval(P.saveTimer); clearTimeout(P.osdTimer); clearInterval(P.watch); clearTimeout(P.retryTimer);
+    P.session = (P.session || 0) + 1; P.reconnecting = false; P.epgFor = null;
     engine.stop();
     document.body.classList.remove('playing');
     var back = P.opts.back; P.opts = {};
@@ -559,6 +609,7 @@
   function renderOsdState() {
     var m = $('#msg'); if (!m) return;
     if (P.error) m.innerHTML = '<div class="center-msg">القناة مش شغالة دلوقتي<br><span style="font-size:26px;color:var(--muted)">OK: جرّب تاني' + (P.opts.live ? ' • ⬇: القناة اللي بعدها' : '') + '</span><small>' + esc(P.error) + '</small></div>';
+    else if (P.reconnecting) m.innerHTML = '<div class="spinner" style="margin-top:470px"></div><div class="reconnect">بيعيد الاتصال… (' + P.retries + '/' + MAX_RETRIES + ')</div>';
     else if (P.buffering) m.innerHTML = '<div class="spinner" style="margin-top:470px"></div>';
     else m.innerHTML = '';
   }
