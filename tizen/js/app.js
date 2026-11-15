@@ -235,7 +235,7 @@
     return '<div class="header"><div class="brand gold-text">المصري<span class="tv">TV</span></div>' +
       (hint ? '<div class="hint">' + hint + '</div>' : '') + '</div>';
   }
-  var FOLDER_SVG = '<svg viewBox="0 0 24 20"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9C7A1F"/><stop offset=".45" stop-color="#FFF4CC"/><stop offset="1" stop-color="#D4AF37"/></linearGradient></defs><path fill="url(#g)" d="M2 2h7l2 2.5h11a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/></svg>';
+  var FOLDER_SVG = '';
 
   function kindOf(p) {
     if (p.type === 'free') return ['📡', 'قنوات مجانية'];
